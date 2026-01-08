@@ -832,6 +832,13 @@ CONTENT_SITE_DOMAINS = {
     'answers.com', 'yahoo.com/answers',
 }
 
+# ============================================================================
+# LEGACY CONSTANTS (kept for backwards compatibility, not used by new logic)
+# ============================================================================
+# These constants were used by the old keyword-based classification logic.
+# The new principled reasoning approach (classify_result_type) defines its own
+# patterns inline with better organization by signal category.
+
 # Strong product signals that indicate a FIRST-PARTY commercial site
 # These must be present along with other indicators
 STRONG_PRODUCT_SIGNALS = {
@@ -882,6 +889,14 @@ CONTENT_KEYWORDS = {
     'buyer\'s guide', 'buyers guide', 'ultimate guide', 'complete guide',
     'how-to guide', 'beginner\'s guide', 'beginners guide'
 }
+
+# ============================================================================
+# CLASSIFICATION THRESHOLDS (new principled reasoning approach)
+# ============================================================================
+# Minimum number of signals required for DIY classification
+# If DIY patterns are found but we also have this many product signals,
+# it's likely a commercial product page, not a tutorial
+MIN_SIGNALS_FOR_DIY_OVERRIDE = 2
 
 
 def is_content_site(url):
@@ -1031,6 +1046,10 @@ def classify_result_type(result):
     # Reasoning: A commercial page must have structural evidence of being a product
     # We need MULTIPLE signals from DIFFERENT categories to be confident
     
+    # NOTE: These patterns are defined inline (not using legacy global constants)
+    # because the new approach organizes signals by CATEGORY and PURPOSE,
+    # making the classification logic more transparent and maintainable.
+    
     # Category 1: Structural/Navigation signals (strongest)
     # These prove the page is structured like a product site
     structural_signals = {
@@ -1111,7 +1130,7 @@ def classify_result_type(result):
     if diy_matches:
         # DIY content is not commercial unless it ALSO has strong product signals
         # If it's just tutorial content, classify as DIY
-        if total_signals < 2:
+        if total_signals < MIN_SIGNALS_FOR_DIY_OVERRIDE:
             logger.debug(f"STEP 3 RESULT: DIY (tutorial/open source)")
             logger.debug(f"  → Matched DIY patterns: {diy_matches[:2]}")
             logger.debug(f"  → Reasoning: Teaching users to build, not selling a product")
