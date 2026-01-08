@@ -4,6 +4,7 @@ import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from urllib.parse import urlparse, urlunparse, parse_qs
 from nlp_utils import preprocess_text, match_keywords_with_deduplication, normalize_problem_text
 
 # Configure logging
@@ -473,15 +474,151 @@ def run_multiple_searches(queries):
 
     return all_results
 
+def normalize_url(url):
+    """
+    Normalize URL to canonical form using deterministic rules.
+    
+    This prevents duplicate counting of the same content that appears with:
+    - Different schemes (http vs https)
+    - Different URL parameters (tracking codes, utm_*, fbclid, etc.)
+    - Different fragments (#section)
+    - Trailing slashes
+    
+    Steps:
+    1. Parse URL into components
+    2. Force HTTPS scheme (unless localhost/IP)
+    3. Lowercase domain
+    4. Remove trailing slash from path
+    5. Remove fragment (#section)
+    6. Remove tracking parameters (utm_*, fbclid, etc.)
+    7. Sort remaining parameters alphabetically
+    8. Reconstruct canonical URL
+    
+    This is DETERMINISTIC - same input always produces same output.
+    NO ML, probabilistic logic, or AI judgment.
+    
+    Args:
+        url: URL string to normalize
+        
+    Returns:
+        Canonical URL string, or None if URL is invalid
+    """
+    if not url or not isinstance(url, str):
+        return None
+    
+    try:
+        # Parse URL into components
+        parsed = urlparse(url.strip())
+        
+        # Skip if no scheme or netloc
+        if not parsed.scheme or not parsed.netloc:
+            return None
+        
+        # Force HTTPS (unless localhost or IP address)
+        scheme = parsed.scheme.lower()
+        if scheme in ('http', 'https'):
+            netloc_lower = parsed.netloc.lower()
+            # Keep http for localhost/IPs, otherwise use https
+            if not (netloc_lower.startswith('localhost') or 
+                    netloc_lower.startswith('127.0.0.1') or
+                    netloc_lower.startswith('192.168.') or
+                    netloc_lower.startswith('10.')):
+                scheme = 'https'
+        
+        # Lowercase domain (case-insensitive per RFC 3986)
+        netloc = parsed.netloc.lower()
+        
+        # Remove trailing slash from path (unless path is just "/")
+        path = parsed.path
+        if path and len(path) > 1 and path.endswith('/'):
+            path = path.rstrip('/')
+        elif not path:
+            path = ''
+        
+        # Remove fragment (e.g., #section1)
+        # Fragments are client-side only and don't affect content
+        fragment = ''
+        
+        # Parse and filter query parameters
+        params = parse_qs(parsed.query, keep_blank_values=False)
+        
+        # Remove tracking parameters (deterministic list)
+        # These don't change content, only track referrers
+        tracking_params = {
+            # Google Analytics
+            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+            '_ga', '_gid', '_gac',
+            # Facebook
+            'fbclid', 'fb_action_ids', 'fb_action_types', 'fb_source',
+            # Microsoft/Bing
+            'msclkid', 'mc_cid', 'mc_eid',
+            # Generic tracking
+            'ref', 'source', 'campaign', 'channel',
+            # Social media
+            'share', 'via',
+        }
+        filtered_params = {k: v for k, v in params.items() 
+                          if k.lower() not in tracking_params}
+        
+        # Sort parameters alphabetically for consistency
+        # URL semantics: ?a=1&b=2 should equal ?b=2&a=1
+        sorted_params = sorted(filtered_params.items())
+        
+        # Reconstruct query string
+        if sorted_params:
+            # Take first value if parameter has multiple values
+            query = '&'.join(f"{k}={v[0] if isinstance(v, list) else v}" 
+                           for k, v in sorted_params)
+        else:
+            query = ''
+        
+        # Reconstruct canonical URL
+        canonical = urlunparse((scheme, netloc, path, '', query, fragment))
+        
+        return canonical
+        
+    except Exception as e:
+        # If URL parsing fails, log and return None
+        logger.debug(f"Failed to normalize URL '{url}': {e}")
+        return None
+
+
 def deduplicate_results(results):
+    """
+    Deduplicate search results by canonical URL.
+    
+    Uses URL normalization to detect duplicates that differ only in:
+    - Scheme (http vs https)
+    - Tracking parameters (utm_*, fbclid, etc.)
+    - Fragments (#section)
+    - Trailing slashes
+    - Parameter order
+    
+    This is DETERMINISTIC - same input always produces same output.
+    
+    Args:
+        results: List of search result dictionaries with 'url' key
+        
+    Returns:
+        List of unique results (first occurrence kept when duplicates found)
+    """
     seen_urls = set()
     unique_results = []
 
     for r in results:
         url = r.get("url")
-        if url and url not in seen_urls:
-            seen_urls.add(url)
+        
+        # Normalize URL to canonical form
+        canonical = normalize_url(url)
+        
+        # Only keep if we haven't seen this canonical URL before
+        if canonical and canonical not in seen_urls:
+            seen_urls.add(canonical)
             unique_results.append(r)
+        else:
+            # Log duplicate for debugging (optional)
+            if canonical and canonical in seen_urls:
+                logger.debug(f"Removing duplicate URL: {url} (canonical: {canonical})")
 
     return unique_results
 
