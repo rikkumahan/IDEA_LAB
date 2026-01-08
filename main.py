@@ -517,23 +517,34 @@ def normalize_url(url):
         # Force HTTPS (unless localhost or IP address)
         scheme = parsed.scheme.lower()
         if scheme in ('http', 'https'):
-            netloc_lower = parsed.netloc.lower()
+            # Extract just the hostname (without port) for checking
+            netloc_parts = parsed.netloc.lower().split(':')
+            hostname = netloc_parts[0]
+            
             # Keep http for localhost/IPs, otherwise use https
-            if not (netloc_lower.startswith('localhost') or 
-                    netloc_lower.startswith('127.0.0.1') or
-                    netloc_lower.startswith('192.168.') or
-                    netloc_lower.startswith('10.')):
+            is_local = (
+                hostname.startswith('localhost') or 
+                hostname.startswith('127.0.0.1') or
+                hostname.startswith('192.168.') or
+                hostname.startswith('10.') or
+                # 172.16.0.0/12 range (172.16.x.x through 172.31.x.x)
+                (hostname.startswith('172.') and 
+                 len(hostname.split('.')) >= 2 and
+                 16 <= int(hostname.split('.')[1]) <= 31)
+            )
+            if not is_local:
                 scheme = 'https'
         
         # Lowercase domain (case-insensitive per RFC 3986)
         netloc = parsed.netloc.lower()
         
-        # Remove trailing slash from path (unless path is just "/")
+        # Remove trailing slash from path (unless path is just "/" for root)
         path = parsed.path
         if path and len(path) > 1 and path.endswith('/'):
             path = path.rstrip('/')
         elif not path:
-            path = ''
+            # Root path should be '/'
+            path = '/'
         
         # Remove fragment (e.g., #section1)
         # Fragments are client-side only and don't affect content
@@ -564,11 +575,18 @@ def normalize_url(url):
         # URL semantics: ?a=1&b=2 should equal ?b=2&a=1
         sorted_params = sorted(filtered_params.items())
         
-        # Reconstruct query string
+        # Reconstruct query string with proper URL encoding
         if sorted_params:
-            # Take first value if parameter has multiple values
-            query = '&'.join(f"{k}={v[0] if isinstance(v, list) else v}" 
-                           for k, v in sorted_params)
+            from urllib.parse import quote
+            # Take first value if parameter has multiple values, and encode it
+            query_parts = []
+            for k, v in sorted_params:
+                value = v[0] if isinstance(v, list) else v
+                # Encode parameter name and value
+                encoded_k = quote(str(k), safe='')
+                encoded_v = quote(str(value), safe='')
+                query_parts.append(f"{encoded_k}={encoded_v}")
+            query = '&'.join(query_parts)
         else:
             query = ''
         

@@ -97,9 +97,11 @@ def test_url_normalization_preserved_parameters():
     assert "page=2" in url4
     assert "utm_source" not in url4
     
-    # Test case 4: Special characters in parameters (parse_qs decodes them)
+    # Test case 4: Special characters in parameters
+    # parse_qs decodes URL encoding, and we re-encode with quote()
     url5 = normalize_url("https://example.com/search?q=hello+world")
-    assert "q=hello world" in url5 or "q=hello+world" in url5 or "q=hello%20world" in url5
+    # After normalization, space should be encoded as %20
+    assert "q=hello%20world" in url5, f"Expected encoded space, got: {url5}"
     
     print("✓ Content parameter preservation tests passed")
 
@@ -115,9 +117,21 @@ def test_url_normalization_localhost():
     # Test case 2: 127.0.0.1 keeps http
     assert normalize_url("http://127.0.0.1:8080/page") == "http://127.0.0.1:8080/page"
     
-    # Test case 3: Private IPs keep http
+    # Test case 3: Private IPs keep http (192.168.x.x)
     assert normalize_url("http://192.168.1.1/page") == "http://192.168.1.1/page"
+    assert normalize_url("http://192.168.1.1:8080/page") == "http://192.168.1.1:8080/page"
+    
+    # Test case 4: Private IPs keep http (10.x.x.x)
     assert normalize_url("http://10.0.0.1/page") == "http://10.0.0.1/page"
+    assert normalize_url("http://10.1.2.3:3000/page") == "http://10.1.2.3:3000/page"
+    
+    # Test case 5: Private IPs keep http (172.16-31.x.x)
+    assert normalize_url("http://172.16.0.1/page") == "http://172.16.0.1/page"
+    assert normalize_url("http://172.31.255.255/page") == "http://172.31.255.255/page"
+    assert normalize_url("http://172.20.0.1:8080/page") == "http://172.20.0.1:8080/page"
+    
+    # Test case 6: Public IP gets https
+    assert normalize_url("http://8.8.8.8/page") == "https://8.8.8.8/page"
     
     print("✓ Localhost/IP handling tests passed")
 
@@ -146,6 +160,14 @@ def test_url_normalization_edge_cases():
     long_path = "/a" * 100
     long_url = f"https://example.com{long_path}"
     assert normalize_url(long_url) == long_url
+    
+    # Test case 6: Root path should be '/'
+    assert normalize_url("https://example.com") == "https://example.com/"
+    assert normalize_url("https://example.com/") == "https://example.com/"
+    
+    # Test case 7: Special characters in query parameters are encoded
+    url_special = normalize_url("https://example.com/page?name=John Doe")
+    assert "name=John%20Doe" in url_special, f"Expected encoded space, got: {url_special}"
     
     print("✓ Edge case tests passed")
 
