@@ -830,7 +830,7 @@ def separate_tool_workaround_results(tool_results, workaround_results):
         else:
             # Unknown - keep in original bucket with warning
             corrected_tool.append(result)
-            logger.debug(f"Ambiguous tool result: {result.get('url')}")
+            logger.debug(f"Ambiguous tool result: {result.get('url', 'unknown')}")
     
     # Re-classify workaround results
     for result in workaround_results:
