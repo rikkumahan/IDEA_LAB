@@ -21,6 +21,39 @@ class IdeaInput(BaseModel):
     target_user: str
     user_claimed_frequency: str
 
+
+# ============================================================================
+# PART 2: STAGE 2 - USER SOLUTION COMPETITOR DETECTION
+# ============================================================================
+#
+# This is Stage 2 ONLY. Stage 1 behavior remains unchanged.
+# 
+# PURPOSE: Detect competitors specific to the user's solution (not just the problem)
+#
+# INPUT: Structured solution attributes (NOT marketing prose)
+# OUTPUT: List of commercial competitors offering similar solutions
+#
+# CONSTRAINTS:
+# - All logic is deterministic and rule-based
+# - No LLM reasoning, no embeddings, no AI judgment
+# - Stage 1 and Stage 2 are strictly separated
+# ============================================================================
+
+class UserSolution(BaseModel):
+    """
+    Structured description of the user's solution.
+    
+    This is NOT marketing prose - it's structured attributes that can be
+    used to generate deterministic search queries.
+    
+    All fields are required to generate precise competitor queries.
+    """
+    core_action: str  # e.g., "validate", "generate", "analyze", "automate"
+    input_required: str  # e.g., "startup idea text", "business plan", "meeting notes"
+    output_type: str  # e.g., "validation report", "competitor list", "summary"
+    target_user: str  # e.g., "startup founders", "product managers", "developers"
+    automation_level: str  # e.g., "AI-powered", "automated", "manual", "semi-automated"
+
 @app.post("/analyze-idea")
 def analyze_idea(data: IdeaInput):
     queries = generate_search_queries(data.problem)
@@ -1544,4 +1577,205 @@ def analyze_market(data: IdeaInput):
         "problem": problem_analysis,
         "competition": competition_analysis,
         "content_saturation": content_analysis
+    }
+
+
+# ============================================================================
+# STAGE 2: USER-SOLUTION COMPETITOR DETECTION
+# ============================================================================
+
+def generate_solution_class_queries(solution: UserSolution):
+    """
+    Generate deterministic search queries based on user's solution attributes.
+    
+    This is STAGE 2 ONLY - generates queries specific to the user's solution,
+    not the problem space.
+    
+    RULES:
+    - Queries are rule-generated and deterministic
+    - Use static templates based on solution attributes
+    - No free-text input, only structured attributes
+    - No LLM rewriting or semantic expansion
+    
+    QUERY TEMPLATES:
+    - "{automation_level} {core_action} software"
+    - "{core_action} {output_type} tool"
+    - "{target_user} {core_action} platform"
+    - "automated {core_action} service"
+    
+    Args:
+        solution: UserSolution with structured attributes
+        
+    Returns:
+        List of search query strings (3-5 queries)
+    """
+    # Extract and normalize attributes
+    core_action = solution.core_action.lower().strip()
+    output_type = solution.output_type.lower().strip()
+    target_user = solution.target_user.lower().strip()
+    automation_level = solution.automation_level.lower().strip()
+    
+    # Generate queries using fixed templates
+    # Each template focuses on a different aspect of the solution
+    queries = [
+        # Template 1: Focus on automation + action
+        f"{automation_level} {core_action} software",
+        
+        # Template 2: Focus on action + output
+        f"{core_action} {output_type} tool",
+        
+        # Template 3: Focus on target user + action
+        f"{target_user} {core_action} platform",
+        
+        # Template 4: Generic automation + action
+        f"automated {core_action} service",
+    ]
+    
+    # Deduplicate queries (case-insensitive)
+    seen = set()
+    unique_queries = []
+    for query in queries:
+        normalized = query.lower().strip()
+        if normalized not in seen and len(normalized) > 5:  # Minimum length check
+            seen.add(normalized)
+            unique_queries.append(query)
+    
+    logger.info(f"Generated {len(unique_queries)} solution-class queries")
+    logger.debug(f"Solution-class queries: {unique_queries}")
+    
+    return unique_queries
+
+
+def extract_pricing_model(result):
+    """
+    Extract pricing model from search result.
+    
+    Deterministic keyword-based extraction (no AI).
+    
+    Args:
+        result: Search result dict with 'title' and 'snippet'
+        
+    Returns:
+        'free', 'freemium', 'paid', or 'unknown'
+    """
+    text = (
+        (result.get("title") or "") + " " +
+        (result.get("snippet") or "")
+    ).lower()
+    
+    # Check for free indicators
+    free_keywords = ['free forever', 'completely free', 'totally free', 'free plan', 'free tier']
+    if any(kw in text for kw in free_keywords):
+        return 'free'
+    
+    # Check for freemium indicators (free + paid tiers)
+    freemium_keywords = ['free trial', 'freemium', 'free and paid', 'upgrade to', 'premium plan']
+    if any(kw in text for kw in freemium_keywords):
+        return 'freemium'
+    
+    # Check for paid indicators
+    paid_keywords = ['pricing', 'subscription', 'price', '$', 'per month', 'per user']
+    if any(kw in text for kw in paid_keywords):
+        return 'paid'
+    
+    return 'unknown'
+
+
+def analyze_user_solution_competitors(solution: UserSolution):
+    """
+    Detect competitors specific to the user's solution (Stage 2).
+    
+    This is STAGE 2 ONLY - finds competitors offering similar solutions,
+    not just addressing the same problem space (which is Stage 1).
+    
+    PROCESS:
+    1. Generate solution-class queries (deterministic, template-based)
+    2. Run searches using these queries
+    3. Classify results using SAME classifier from Stage 1
+    4. Return ONLY commercial products (no blogs, Reddit, Quora, reviews)
+    
+    CONSTRAINTS:
+    - No ranking or scoring
+    - No comparison to user's product
+    - No LLM reasoning
+    - Strictly separated from Stage 1
+    
+    Args:
+        solution: UserSolution with structured attributes
+        
+    Returns:
+        Dict with:
+        - exists: bool (competitors found)
+        - count: int (number of commercial competitors)
+        - products: list of commercial product dicts
+    """
+    # Step 1: Generate solution-class queries
+    queries = generate_solution_class_queries(solution)
+    
+    # Step 2: Run searches
+    all_results = run_multiple_searches(queries)
+    
+    # Step 3: Deduplicate results
+    unique_results = deduplicate_results(all_results)
+    
+    # Step 4: Classify and filter to ONLY commercial products
+    commercial_products = []
+    
+    for result in unique_results:
+        result_type = classify_result_type(result)
+        
+        # Only include COMMERCIAL products
+        # Exclude: DIY, content (blogs/Reddit/Quora/reviews), unknown
+        if result_type == 'commercial':
+            # Extract product information
+            product_info = {
+                'name': result.get('title', 'Unknown Product'),
+                'url': result.get('url', ''),
+                'pricing_model': extract_pricing_model(result),
+                'snippet': result.get('snippet', ''),
+            }
+            commercial_products.append(product_info)
+            
+            logger.debug(f"Found commercial competitor: {product_info['name']}")
+        else:
+            # Log excluded results for debugging
+            logger.debug(
+                f"Excluded from competitors (type={result_type}): "
+                f"{result.get('url', 'unknown')}"
+            )
+    
+    exists = len(commercial_products) > 0
+    count = len(commercial_products)
+    
+    logger.info(
+        f"Stage 2: Found {count} commercial competitors for user solution "
+        f"(excluded {len(unique_results) - count} non-commercial results)"
+    )
+    
+    return {
+        'exists': exists,
+        'count': count,
+        'products': commercial_products,
+        'queries_used': queries,
+    }
+
+
+@app.post("/analyze-user-solution")
+def analyze_user_solution(solution: UserSolution):
+    """
+    Stage 2 endpoint: Analyze competitors for user's specific solution.
+    
+    This is STAGE 2 - detects competitors offering similar solutions.
+    Strictly separated from Stage 1 (problem analysis).
+    
+    Args:
+        solution: UserSolution with structured attributes
+        
+    Returns:
+        Dict with user_solution_competitors analysis
+    """
+    competitors = analyze_user_solution_competitors(solution)
+    
+    return {
+        'user_solution_competitors': competitors
     }
