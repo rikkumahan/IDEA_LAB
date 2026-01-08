@@ -13,13 +13,16 @@ NO semantic reasoning, embeddings, ML models, or AI judgment.
 
 import re
 from typing import List, Set, Tuple, Dict, Any
-from nltk.stem import PorterStemmer
+from nltk.stem import PorterStemmer, WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.util import ngrams
 
 # Initialize stemmer (deterministic algorithm)
 stemmer = PorterStemmer()
+
+# Initialize lemmatizer for query normalization
+lemmatizer = WordNetLemmatizer()
 
 # English stopwords (deterministic list)
 STOPWORDS = set(stopwords.words('english'))
@@ -329,3 +332,64 @@ def match_keywords_with_deduplication(keywords: List[str], preprocessed: Dict[st
             return True
     
     return False
+
+
+def normalize_problem_text(problem: str) -> str:
+    """
+    Normalize problem text BEFORE query generation using deterministic NLP.
+    
+    This function:
+    1. Converts to lowercase
+    2. Tokenizes
+    3. Removes stopwords (excluding important negations like 'not', 'no', 'never')
+    4. Lemmatizes (reduces words to base forms)
+    5. Joins back into a normalized phrase
+    
+    This is DETERMINISTIC - same input always produces same output.
+    NO LLM, embeddings, or semantic reasoning.
+    
+    Args:
+        problem: Raw problem text from user input
+        
+    Returns:
+        Normalized problem text (lowercase, lemmatized, core content words)
+        
+    Example:
+        Input:  "Managing multiple spreadsheets daily"
+        Output: "manage multiple spreadsheet daily"
+        
+        Input:  "Frustrated with manual data entry"
+        Output: "frustrate manual data entry"
+    """
+    if not problem or not problem.strip():
+        return ""
+    
+    # Step 1: Lowercase
+    text = problem.lower().strip()
+    
+    # Step 2: Tokenize
+    tokens = word_tokenize(text)
+    
+    # Step 3: Remove stopwords (but keep important ones for context)
+    # We keep some stopwords that might be meaningful in problem descriptions
+    minimal_stopwords = STOPWORDS - {'not', 'no', 'never', 'cannot', 'can\'t'}
+    tokens_filtered = [t for t in tokens if t.isalnum() and t not in minimal_stopwords]
+    
+    # Step 4: Lemmatize (reduce to base forms)
+    # Try both noun and verb lemmatization to get the most common form
+    lemmatized = []
+    for token in tokens_filtered:
+        # Try verb lemmatization first (often more specific)
+        verb_form = lemmatizer.lemmatize(token, pos='v')
+        # Try noun lemmatization
+        noun_form = lemmatizer.lemmatize(token, pos='n')
+        # Use the shorter form (usually the base form)
+        if len(verb_form) <= len(noun_form):
+            lemmatized.append(verb_form)
+        else:
+            lemmatized.append(noun_form)
+    
+    # Step 5: Join back into normalized phrase
+    normalized = ' '.join(lemmatized)
+    
+    return normalized
