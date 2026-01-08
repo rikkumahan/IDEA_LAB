@@ -832,6 +832,13 @@ CONTENT_SITE_DOMAINS = {
     'answers.com', 'yahoo.com/answers',
 }
 
+# ============================================================================
+# LEGACY CONSTANTS (kept for backwards compatibility, not used by new logic)
+# ============================================================================
+# These constants were used by the old keyword-based classification logic.
+# The new principled reasoning approach (classify_result_type) defines its own
+# patterns inline with better organization by signal category.
+
 # Strong product signals that indicate a FIRST-PARTY commercial site
 # These must be present along with other indicators
 STRONG_PRODUCT_SIGNALS = {
@@ -882,6 +889,14 @@ CONTENT_KEYWORDS = {
     'buyer\'s guide', 'buyers guide', 'ultimate guide', 'complete guide',
     'how-to guide', 'beginner\'s guide', 'beginners guide'
 }
+
+# ============================================================================
+# CLASSIFICATION THRESHOLDS (new principled reasoning approach)
+# ============================================================================
+# Minimum number of signals required for DIY classification
+# If DIY patterns are found but we also have this many product signals,
+# it's likely a commercial product page, not a tutorial
+MIN_SIGNALS_FOR_DIY_OVERRIDE = 2
 
 
 def is_content_site(url):
@@ -934,30 +949,34 @@ def classify_result_type(result):
     """
     Classify search result as commercial, diy, content, or unknown.
     
-    CLASSIFICATION RULES (deterministic, no ML/AI):
+    REDESIGNED WITH PRINCIPLED REASONING (no keyword frequency alone):
     
-    1. CONTENT (highest priority for content sites):
-       - URL is from Reddit, Quora, Medium, review sites, blogs
-       - These sites DISCUSS tools but don't offer them directly
-       
-    2. CONTENT (comparison/review articles):
-       - Contains review/comparison keywords (vs, review, best, comparison)
-       - Even if also contains product signals
-       
-    3. COMMERCIAL (only for first-party product sites):
-       - NOT a content site (rules 1-2 don't apply)
-       - Has STRONG product signals (signup, pricing, dashboard)
-       - Explicitly offers the solution directly
-       
-    4. DIY:
-       - Has DIY keywords (tutorials, open source, build your own)
-       - Not classified as content or commercial
-       
-    5. UNKNOWN:
-       - Doesn't match any of the above
+    PHILOSOPHY: 
+    - Accuracy > speed: Take time to properly analyze
+    - Under-counting > over-counting: When uncertain, classify as non-commercial
+    - Multi-step reasoning: Prove each classification step-by-step
+    - Structural signals > textual signals: Look for page structure patterns
     
-    PRECEDENCE: commercial > diy > content > unknown
-    (But content site check and review/comparison check happen FIRST)
+    CLASSIFICATION APPROACH:
+    
+    STEP 1: PROVE page is informational (eliminates false positives)
+       → Check domain: Is it Reddit, Medium, LinkedIn, etc?
+       → Check content patterns: Review, comparison, guide, newsletter?
+       → If YES to either → CONTENT (never commercial)
+    
+    STEP 2: PROVE page is first-party product (requires multiple signals)
+       → Structural signals: Navigation patterns, pricing page indicators
+       → Product offering: Direct signup/trial CTAs, pricing tiers
+       → Business indicators: Legal footer, enterprise features
+       → Requires MULTIPLE signals from different categories
+    
+    STEP 3: Verify DIRECT offering (not just mention)
+       → Must be offering the solution ON THIS PAGE
+       → Not just discussing or linking to other solutions
+    
+    STEP 4: Fallback for uncertainty
+       → If we cannot confidently prove commercial → default to non-commercial
+       → Bias toward false negatives to avoid over-counting
     
     Args:
         result: Search result dict with 'title', 'snippet', and optionally 'url'
@@ -966,86 +985,226 @@ def classify_result_type(result):
         'commercial', 'diy', 'content', or 'unknown'
     """
     url = result.get('url', '')
-    text = (
-        (result.get("title") or "") + " " +
-        (result.get("snippet") or "")
-    ).lower()
+    title = (result.get("title") or "").lower()
+    snippet = (result.get("snippet") or "").lower()
+    text = title + " " + snippet
     
-    # RULE 1: Check if this is a content/discussion site FIRST
-    # Content sites should NEVER be classified as commercial
+    # ========================================================================
+    # STEP 1: PROVE this is INFORMATIONAL content (highest priority)
+    # ========================================================================
+    # Reasoning: Content sites discuss/review products but never offer them directly
+    # If domain matches known content sites → CANNOT be commercial
+    
     if is_content_site(url):
-        logger.debug(f"Classified as CONTENT (content site domain): {url}")
+        logger.debug(f"STEP 1 RESULT: CONTENT (known content site domain)")
+        logger.debug(f"  → URL: {url}")
+        logger.debug(f"  → Reasoning: Content sites discuss products but don't sell them")
         return 'content'
     
-    # Check for signal presence
-    has_strong_product = any(signal in text for signal in STRONG_PRODUCT_SIGNALS)
-    has_commercial = any(kw in text for kw in COMMERCIAL_KEYWORDS)
-    has_diy = any(kw in text for kw in DIY_KEYWORDS)
+    # Check for strong informational patterns that prove this is content
+    # These patterns indicate the page is TALKING ABOUT products, not SELLING one
+    informational_patterns = {
+        # Comparison/review patterns - discussing multiple products
+        'comparison': ['vs', 'versus', 'comparison', 'compare'],
+        'review': ['review', 'reviews', 'reviewed'],
+        
+        # List/roundup patterns - aggregating multiple solutions
+        'list': ['best tool', 'best software', 'best app', 'best product', 
+                 'top tool', 'top software', 'top app', 'top product',
+                 'best crm', 'best platform', 'best solution', 'best service'],
+        'roundup': ['roundup', 'listicle', 'alternatives to', 'list of'],
+        
+        # Educational content patterns - teaching, not selling
+        'guide': ['ultimate guide', 'complete guide', 'buyer\'s guide', 'buyers guide',
+                  'beginner\'s guide', 'beginners guide', 'how-to guide', 'step-by-step guide'],
+        
+        # Newsletter/publication patterns - curated content
+        'newsletter': ['newsletter', 'weekly newsletter', 'monthly newsletter', 
+                       'subscribe to newsletter', 'subscribe to our newsletter'],
+        
+        # Blog/article patterns - editorial content
+        'blog': ['blog post', 'article about', 'read more', 'written by', 'posted by'],
+    }
     
-    # RULE 2: Strong CONTENT indicators (comparison/review articles)
-    # These should be classified as content even if they mention pricing
-    # Check for strong comparison/review patterns
-    # Note: "best" and "top" must be followed by product-related words to avoid false positives
-    # like "best practices" which is not a product comparison
-    # BLOCKING BUG FIX: Added guide and newsletter patterns to prevent misclassification
-    # NOTE: Some overlap with CONTENT_KEYWORDS is intentional - these are STRONG signals
-    # that override product signals, while CONTENT_KEYWORDS are weaker signals
-    strong_content_patterns = [
-        'vs', 'versus', 'comparison', 'compare', 'review', 'reviews',
-        'best tool', 'best software', 'best app', 'best product', 'best solution',
-        'best crm', 'best platform', 'best service',
-        'top tool', 'top software', 'top app', 'top product',
-        'roundup', 'listicle', 'alternatives to',
-        # Guide patterns (must be strong to avoid false positives)
-        'ultimate guide', 'complete guide', 'buyer\'s guide', 'buyers guide',
-        'beginner\'s guide', 'beginners guide', 'how-to guide',
-        # Newsletter patterns
-        'newsletter', 'weekly newsletter', 'monthly newsletter', 'subscribe to'
+    # Track which patterns matched for better debugging
+    matched_patterns = []
+    for category, patterns in informational_patterns.items():
+        for pattern in patterns:
+            if pattern in text:
+                matched_patterns.append(f"{category}:{pattern}")
+    
+    if matched_patterns:
+        logger.debug(f"STEP 1 RESULT: CONTENT (informational patterns detected)")
+        logger.debug(f"  → URL: {url}")
+        logger.debug(f"  → Matched patterns: {matched_patterns[:3]}")  # Show first 3
+        logger.debug(f"  → Reasoning: Page is discussing/reviewing products, not selling one")
+        return 'content'
+    
+    # ========================================================================
+    # STEP 2: PROVE this is a FIRST-PARTY PRODUCT page (requires multiple signals)
+    # ========================================================================
+    # Reasoning: A commercial page must have structural evidence of being a product
+    # We need MULTIPLE signals from DIFFERENT categories to be confident
+    
+    # NOTE: These patterns are defined inline (not using legacy global constants)
+    # because the new approach organizes signals by CATEGORY and PURPOSE,
+    # making the classification logic more transparent and maintainable.
+    
+    # Category 1: Structural/Navigation signals (strongest)
+    # These prove the page is structured like a product site
+    structural_signals = {
+        'pricing_page': ['pricing', 'plans', 'subscription', 'choose your plan'],
+        'signup_page': ['sign up', 'signup', 'create account', 'register now'],
+        'product_access': ['dashboard', 'login', 'log in', 'access your account', 'get started'],
+    }
+    
+    structural_matches = []
+    for signal_type, patterns in structural_signals.items():
+        for pattern in patterns:
+            if pattern in text:
+                structural_matches.append(signal_type)
+                break  # Only count each signal type once
+    
+    # Category 2: Product offering signals (medium strength)
+    # These prove the page is directly offering something
+    offering_signals = {
+        'trial': ['free trial', 'start free trial', 'try it free', '14-day trial', 'trial'],
+        'demo': ['request demo', 'book demo', 'schedule demo'],
+        'immediate_action': ['get started', 'start now', 'join now'],
+        'purchase': ['purchase', 'buy now', 'buy', 'license'],
+    }
+    
+    offering_matches = []
+    for signal_type, patterns in offering_signals.items():
+        for pattern in patterns:
+            if pattern in text:
+                offering_matches.append(signal_type)
+                break
+    
+    # Category 3: Business/enterprise signals (weakest alone)
+    # These support commercial classification but aren't sufficient alone
+    business_signals = {
+        'saas': ['saas', 'software as a service', 'platform'],
+        'enterprise': ['enterprise', 'for teams', 'for businesses', 'for organizations'],
+    }
+    
+    business_matches = []
+    for signal_type, patterns in business_signals.items():
+        for pattern in patterns:
+            if pattern in text:
+                business_matches.append(signal_type)
+                break
+    
+    # Count total signals across all categories
+    total_signals = len(structural_matches) + len(offering_matches) + len(business_matches)
+    
+    # Also check if signals span multiple categories (stronger evidence)
+    categories_with_signals = 0
+    if structural_matches:
+        categories_with_signals += 1
+    if offering_matches:
+        categories_with_signals += 1
+    if business_matches:
+        categories_with_signals += 1
+    
+    logger.debug(f"STEP 2 ANALYSIS: Product signal detection")
+    logger.debug(f"  → Structural signals: {structural_matches}")
+    logger.debug(f"  → Offering signals: {offering_matches}")
+    logger.debug(f"  → Business signals: {business_matches}")
+    logger.debug(f"  → Total signals: {total_signals}, Categories: {categories_with_signals}")
+    
+    # ========================================================================
+    # STEP 3: CHECK for DIY/Tutorial content
+    # ========================================================================
+    # Reasoning: DIY content teaches users to build their own solution
+    # This is different from both commercial and content
+    
+    diy_patterns = [
+        'how to build', 'how to create', 'diy', 'do it yourself',
+        'open source', 'github', 'code snippet', 'build your own',
+        'create your own', 'tutorial', 'step by step', 'homebrew'
     ]
-    has_strong_content = any(pattern in text for pattern in strong_content_patterns)
     
-    # Weaker content signals (only used in combination with other signals)
-    weak_content_signals = ['review', 'comparison', 'guide', 'blog', 'article']
-    has_weak_content = any(signal in text for signal in weak_content_signals)
+    diy_matches = [p for p in diy_patterns if p in text]
     
-    if has_strong_content:
-        # This is a comparison/review article, not a product page
-        logger.debug(f"Classified as CONTENT (comparison/review article): {url}")
-        return 'content'
+    if diy_matches:
+        # DIY content is not commercial unless it ALSO has strong product signals
+        # If it's just tutorial content, classify as DIY
+        if total_signals < MIN_SIGNALS_FOR_DIY_OVERRIDE:
+            logger.debug(f"STEP 3 RESULT: DIY (tutorial/open source)")
+            logger.debug(f"  → Matched DIY patterns: {diy_matches[:2]}")
+            logger.debug(f"  → Reasoning: Teaching users to build, not selling a product")
+            return 'diy'
     
-    # RULE 3: COMMERCIAL classification (strict requirements)
-    # Must have STRONG product signals AND not be a content/review article
-    # This prevents review articles from being commercial just because they mention pricing
-    if has_strong_product and not has_diy and not has_weak_content:
-        logger.debug(f"Classified as COMMERCIAL (strong product signals): {url}")
+    # ========================================================================
+    # STEP 4: MAKE FINAL CLASSIFICATION DECISION
+    # ========================================================================
+    # Reasoning: Only classify as commercial if we have HIGH CONFIDENCE
+    
+    # COMMERCIAL requires strong evidence of being a first-party product:
+    # OPTION 1: Multiple structural signals (2+) - proves page structure is product-focused
+    # OPTION 2: Structural + offering signals - proves both structure AND direct offering
+    # OPTION 3: Multiple signals (2+) across multiple categories - proves diverse evidence
+    
+    has_multiple_structural = len(structural_matches) >= 2
+    has_strong_structural = len(structural_matches) >= 1
+    has_offering = len(offering_matches) >= 1
+    has_multiple_categories = categories_with_signals >= 2
+    has_sufficient_signals = total_signals >= 2
+    
+    # STRONGEST evidence: Multiple structural signals (pricing + signup + dashboard)
+    # This proves the page has first-party product infrastructure
+    if has_multiple_structural:
+        logger.debug(f"STEP 4 RESULT: COMMERCIAL (multiple structural signals)")
+        logger.debug(f"  → URL: {url}")
+        logger.debug(f"  → Structural signals: {structural_matches}")
+        logger.debug(f"  → Reasoning: Multiple navigation/structure patterns prove first-party product")
+        logger.debug(f"  → This is not a blog/review - it has pricing, signup, or dashboard access")
         return 'commercial'
     
-    # RULE 4: DIY classification
-    if has_diy and not has_strong_product:
-        logger.debug(f"Classified as DIY (tutorial/open source): {url}")
-        return 'diy'
-    
-    # RULE 5: CONTENT classification (based on weak content keywords)
-    # Articles that discuss/review tools but aren't on known content domains
-    # Only classify as content if there are weak content keywords but NO strong product signals
-    if has_weak_content and not has_strong_product and not has_diy:
-        logger.debug(f"Classified as CONTENT (review/comparison): {url}")
-        return 'content'
-    
-    # RULE 6: Mixed signals or unclear
-    if has_strong_product and has_diy:
-        # Mixed signals - commercial wins (precedence rule)
-        logger.debug(f"Classified as COMMERCIAL (mixed signals, precedence): {url}")
+    # STRONG evidence: Structural + offering signals combined
+    # Page has both infrastructure AND direct call-to-action
+    if has_strong_structural and has_offering:
+        logger.debug(f"STEP 4 RESULT: COMMERCIAL (structural + offering signals)")
+        logger.debug(f"  → URL: {url}")
+        logger.debug(f"  → Reasoning: Page has both structural navigation AND direct offering")
+        logger.debug(f"  → This proves it's a first-party product page")
         return 'commercial'
     
-    if has_commercial and not has_strong_product:
-        # Weak commercial signals without strong product signals
-        # Likely a review/discussion, classify as content
-        logger.debug(f"Classified as CONTENT (weak commercial signals): {url}")
+    # MODERATE evidence: Multiple signals across different categories
+    # Diverse signals from different aspects prove first-party product
+    if has_sufficient_signals and has_multiple_categories:
+        logger.debug(f"STEP 4 RESULT: COMMERCIAL (multiple signals across categories)")
+        logger.debug(f"  → URL: {url}")
+        logger.debug(f"  → Signals: {total_signals} across {categories_with_signals} categories")
+        logger.debug(f"  → Reasoning: Multiple independent signals prove first-party product")
+        return 'commercial'
+    
+    # ========================================================================
+    # FALLBACK: When uncertain, prefer false negatives
+    # ========================================================================
+    # Reasoning: Better to under-count commercial competitors than over-count
+    # If we can't confidently prove it's commercial, default to safer classification
+    
+    # Weak signals suggest content/discussion rather than product
+    weak_content_indicators = ['article', 'post', 'blog', 'discussion', 'thread', 'comment']
+    has_weak_content = any(indicator in text for indicator in weak_content_indicators)
+    
+    if has_weak_content:
+        logger.debug(f"FALLBACK RESULT: CONTENT (weak signals + content indicators)")
+        logger.debug(f"  → Cannot confidently prove this is commercial")
+        logger.debug(f"  → Defaulting to CONTENT to avoid false positives")
         return 'content'
     
-    # Default: unknown
-    logger.debug(f"Classified as UNKNOWN (no clear signals): {url}")
+    # If we have some signals but not enough for commercial, it's unclear
+    if total_signals > 0:
+        logger.debug(f"FALLBACK RESULT: UNKNOWN (insufficient signals for commercial)")
+        logger.debug(f"  → Signals detected but not enough to prove commercial")
+        logger.debug(f"  → Following under-counting principle")
+        return 'unknown'
+    
+    # No signals at all
+    logger.debug(f"FALLBACK RESULT: UNKNOWN (no classification signals detected)")
     return 'unknown'
 
 
