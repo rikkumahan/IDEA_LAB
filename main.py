@@ -1004,17 +1004,22 @@ def classify_saturation_signal(content_count, blog_results):
 
 
 # Solution-class existence detection keywords
+# Organized by signal type for easier maintenance
+COMPARISON_SIGNALS = {
+    'vs', 'versus', 'comparison', 'alternatives to',
+    'best', 'top', 'leading', 'compare'
+}
+
+MARKET_MATURITY_SIGNALS = {
+    'market', 'industry', 'providers', 'vendors',
+    'options', 'solutions available', 'choose from'
+}
+
 SOLUTION_CLASS_SIGNALS = {
     # Category/market indicators
     'software', 'platform', 'tool', 'solution', 'system',
     'service', 'product', 'application', 'app',
-    # Comparison/review indicators (suggests established category)
-    'vs', 'versus', 'comparison', 'alternatives to',
-    'best', 'top', 'leading', 'compare',
-    # Market maturity indicators
-    'market', 'industry', 'providers', 'vendors',
-    'options', 'solutions available', 'choose from'
-}
+}.union(COMPARISON_SIGNALS).union(MARKET_MATURITY_SIGNALS)
 
 CATEGORY_NAME_PATTERNS = {
     # Common SaaS category patterns
@@ -1089,13 +1094,11 @@ def detect_solution_class_existence(tool_results):
             solution_class_count += 1
         
         # Check for comparison signals (strong indicator of category)
-        comparison_signals = ['vs', 'versus', 'comparison', 'alternatives to', 'compare', 'best', 'top']
-        if any(signal in text for signal in comparison_signals):
+        if any(signal in text for signal in COMPARISON_SIGNALS):
             comparison_count += 1
         
         # Check for market maturity signals
-        market_signals = ['market', 'industry', 'providers', 'vendors', 'leading']
-        if any(signal in text for signal in market_signals):
+        if any(signal in text for signal in MARKET_MATURITY_SIGNALS):
             market_maturity_count += 1
         
         # Extract potential category names (e.g., "CRM software", "project management tools")
