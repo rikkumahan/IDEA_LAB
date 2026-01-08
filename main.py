@@ -1003,6 +1003,157 @@ def classify_saturation_signal(content_count, blog_results):
     return "NEUTRAL"
 
 
+# Solution-class existence detection keywords
+SOLUTION_CLASS_SIGNALS = {
+    # Category/market indicators
+    'software', 'platform', 'tool', 'solution', 'system',
+    'service', 'product', 'application', 'app',
+    # Comparison/review indicators (suggests established category)
+    'vs', 'versus', 'comparison', 'alternatives to',
+    'best', 'top', 'leading', 'compare',
+    # Market maturity indicators
+    'market', 'industry', 'providers', 'vendors',
+    'options', 'solutions available', 'choose from'
+}
+
+CATEGORY_NAME_PATTERNS = {
+    # Common SaaS category patterns
+    'software', 'platform', 'tools', 'solution', 'system',
+    'service', 'app', 'suite', 'management'
+}
+
+
+def detect_solution_class_existence(tool_results):
+    """
+    Detect whether a dedicated product category/solution-class exists.
+    
+    This is a product-agnostic market signal that indicates market maturity:
+    - If a category exists (e.g., "CRM software", "project management tools"),
+      the market has recognized this problem as worthy of specialized products
+    - If no category exists, this may be a novel/emerging problem space
+    
+    Detection rules (deterministic):
+    1. Check if results mention category/comparison language
+    2. Look for multiple products being discussed together (comparison articles)
+    3. Detect market/industry language suggesting established category
+    
+    Args:
+        tool_results: Commercial product search results
+        
+    Returns:
+        Dict with:
+        - exists: True/False (category exists)
+        - confidence: LOW/MEDIUM/HIGH
+        - evidence: List of signals detected
+    """
+    if not tool_results:
+        return {
+            'exists': False,
+            'confidence': 'NONE',
+            'evidence': [],
+            'category_indicators': []
+        }
+    
+    # Count signal occurrences
+    solution_class_count = 0
+    comparison_count = 0
+    market_maturity_count = 0
+    category_indicators = []
+    
+    for result in tool_results:
+        text = (
+            (result.get('title') or '') + ' ' + 
+            (result.get('snippet') or '')
+        ).lower()
+        
+        # Check for solution-class signals
+        if any(signal in text for signal in SOLUTION_CLASS_SIGNALS):
+            solution_class_count += 1
+        
+        # Check for comparison signals (strong indicator of category)
+        comparison_signals = ['vs', 'versus', 'comparison', 'alternatives to', 'compare', 'best', 'top']
+        if any(signal in text for signal in comparison_signals):
+            comparison_count += 1
+        
+        # Check for market maturity signals
+        market_signals = ['market', 'industry', 'providers', 'vendors', 'leading']
+        if any(signal in text for signal in market_signals):
+            market_maturity_count += 1
+        
+        # Extract potential category names (e.g., "CRM software", "project management tools")
+        for pattern in CATEGORY_NAME_PATTERNS:
+            if pattern in text:
+                # Extract a few words before and after the pattern
+                words = text.split()
+                for i, word in enumerate(words):
+                    if pattern in word:
+                        # Get context around the pattern (2 words before, pattern, 2 words after)
+                        start = max(0, i - 2)
+                        end = min(len(words), i + 3)
+                        context = ' '.join(words[start:end])
+                        if len(context) > 5:  # Meaningful context
+                            category_indicators.append(context)
+    
+    total_results = len(tool_results)
+    
+    # Compute ratios
+    solution_class_ratio = solution_class_count / total_results
+    comparison_ratio = comparison_count / total_results
+    market_maturity_ratio = market_maturity_count / total_results
+    
+    # Collect evidence
+    evidence = []
+    
+    if solution_class_ratio > 0.3:
+        evidence.append(f"{solution_class_ratio:.0%} of results mention solution/product language")
+    
+    if comparison_ratio > 0.2:
+        evidence.append(f"{comparison_ratio:.0%} of results are comparison/review articles")
+    
+    if market_maturity_ratio > 0.2:
+        evidence.append(f"{market_maturity_ratio:.0%} of results mention market/industry")
+    
+    # Deterministic rules for existence and confidence
+    # Rule 1: HIGH confidence - comparison articles + market language (established category)
+    if comparison_ratio > 0.3 and market_maturity_ratio > 0.2:
+        exists = True
+        confidence = 'HIGH'
+        evidence.append("Strong category signals: comparison articles + market maturity indicators")
+    
+    # Rule 2: MEDIUM confidence - solution-class language + some comparisons
+    elif solution_class_ratio > 0.5 and comparison_ratio > 0.2:
+        exists = True
+        confidence = 'MEDIUM'
+        evidence.append("Moderate category signals: solution language + comparison articles")
+    
+    # Rule 3: LOW confidence - solution-class language but no comparisons
+    elif solution_class_ratio > 0.4:
+        exists = True
+        confidence = 'LOW'
+        evidence.append("Weak category signals: solution language present but limited comparisons")
+    
+    # Rule 4: No category detected
+    else:
+        exists = False
+        confidence = 'NONE'
+        evidence.append("No strong category signals detected - may be novel/emerging problem space")
+    
+    # Deduplicate category indicators
+    unique_categories = list(set(category_indicators[:10]))  # Top 10 unique
+    
+    logger.info(
+        f"Solution-class existence: {exists} (confidence: {confidence}) - "
+        f"{len(evidence)} signals detected"
+    )
+    
+    return {
+        'exists': exists,
+        'confidence': confidence,
+        'evidence': evidence,
+        'category_indicators': unique_categories
+    }
+
+
 def analyze_competition(problem: str):
     """
     Analyze competition pressure for a problem.
@@ -1048,6 +1199,9 @@ def analyze_competition(problem: str):
     else:
         overall_pressure = "LOW"
     
+    # Detect solution-class existence (product category maturity signal)
+    solution_class = detect_solution_class_existence(tool_results)
+    
     return {
         "commercial_competitors": {
             "count": commercial_count,
@@ -1066,6 +1220,7 @@ def analyze_competition(problem: str):
             ]
         },
         "overall_pressure": overall_pressure,
+        "solution_class_exists": solution_class,
         "queries_used": {
             "tool_queries": queries["tool_queries"],
             "workaround_queries": queries["workaround_queries"]

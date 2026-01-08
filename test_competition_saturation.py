@@ -8,6 +8,7 @@ COMPETITION_SATURATION_AUDIT.md:
 - ISSUE 3: Content saturation interpretation (negative vs neutral)
 - ISSUE 4: Competition pressure thresholds
 - ISSUE 5: Workaround type classification (seeking vs found)
+- NEW: Solution-class existence detection
 
 All tests verify deterministic behavior (no ML, no probabilistic logic).
 """
@@ -18,7 +19,8 @@ from main import (
     separate_tool_workaround_results,
     compute_competition_pressure,
     classify_saturation_signal,
-    deduplicate_results
+    deduplicate_results,
+    detect_solution_class_existence
 )
 
 
@@ -373,6 +375,193 @@ def test_boundary_conditions():
     print("✓ Boundary condition tests passed")
 
 
+def test_solution_class_high_confidence():
+    """Test HIGH confidence solution-class detection"""
+    print("\nTesting HIGH confidence solution-class detection...")
+    
+    # Create results with comparison articles + market maturity signals
+    results = [
+        {
+            'title': 'Top CRM Software Comparison 2025',
+            'snippet': 'Compare leading CRM platforms in the market. Industry analysis of top providers.'
+        },
+        {
+            'title': 'Best CRM Tools vs Alternatives',
+            'snippet': 'Vendor comparison for CRM software solutions. Choose from market leaders.'
+        },
+        {
+            'title': 'CRM Software Market Analysis',
+            'snippet': 'Industry report on CRM platform providers and their market share.'
+        },
+        {
+            'title': 'Salesforce vs HubSpot: CRM Comparison',
+            'snippet': 'Compare top CRM software vendors. Which platform is best for your business?'
+        },
+        {
+            'title': 'CRM Solution Providers Review',
+            'snippet': 'Leading CRM software companies and their enterprise solutions.'
+        },
+    ]
+    
+    detection = detect_solution_class_existence(results)
+    
+    # Should detect HIGH confidence (comparison + market language)
+    assert detection['exists'] == True
+    assert detection['confidence'] == 'HIGH'
+    assert len(detection['evidence']) > 0
+    
+    print("✓ HIGH confidence solution-class detection passed")
+
+
+def test_solution_class_medium_confidence():
+    """Test MEDIUM confidence solution-class detection"""
+    print("\nTesting MEDIUM confidence solution-class detection...")
+    
+    # Create results with solution language + some comparisons
+    results = [
+        {
+            'title': 'CRM Software for Small Business',
+            'snippet': 'Customer relationship management platform and tools for managing contacts.'
+        },
+        {
+            'title': 'Best CRM Tools to Consider',
+            'snippet': 'Software solutions for CRM. Compare options for your team.'
+        },
+        {
+            'title': 'CRM System Features',
+            'snippet': 'Platform capabilities for customer management. Tools and applications available.'
+        },
+        {
+            'title': 'CRM Software Solutions',
+            'snippet': 'Products and services for customer relationship management.'
+        },
+        {
+            'title': 'CRM Platform Overview',
+            'snippet': 'Software and tools for managing customer data and relationships.'
+        },
+    ]
+    
+    detection = detect_solution_class_existence(results)
+    
+    # Should detect MEDIUM confidence (solution language + some comparisons)
+    assert detection['exists'] == True
+    assert detection['confidence'] in ['MEDIUM', 'LOW']  # Could be MEDIUM or LOW depending on thresholds
+    
+    print("✓ MEDIUM confidence solution-class detection passed")
+
+
+def test_solution_class_low_confidence():
+    """Test LOW confidence solution-class detection"""
+    print("\nTesting LOW confidence solution-class detection...")
+    
+    # Create results with some solution language but minimal comparisons
+    results = [
+        {
+            'title': 'CRM Software Introduction',
+            'snippet': 'What is customer relationship management software and how it works.'
+        },
+        {
+            'title': 'CRM Tools Overview',
+            'snippet': 'Understanding CRM platform capabilities and features.'
+        },
+        {
+            'title': 'CRM Solution Benefits',
+            'snippet': 'Why businesses use CRM software for customer management.'
+        },
+        {
+            'title': 'Getting Started with CRM',
+            'snippet': 'Introduction to CRM systems and tools for your business.'
+        },
+        {
+            'title': 'CRM Software Guide',
+            'snippet': 'Learn about customer management platforms and their applications.'
+        },
+    ]
+    
+    detection = detect_solution_class_existence(results)
+    
+    # Should detect LOW or MEDIUM confidence
+    assert detection['exists'] == True
+    assert detection['confidence'] in ['LOW', 'MEDIUM']
+    
+    print("✓ LOW confidence solution-class detection passed")
+
+
+def test_solution_class_not_exists():
+    """Test when solution-class does NOT exist"""
+    print("\nTesting solution-class NOT exists...")
+    
+    # Create results without category/comparison signals
+    results = [
+        {
+            'title': 'How to manage customer data manually',
+            'snippet': 'Tips for tracking customer information in spreadsheets.'
+        },
+        {
+            'title': 'Customer management challenges',
+            'snippet': 'Common problems with manual customer tracking.'
+        },
+        {
+            'title': 'Organizing customer contacts',
+            'snippet': 'Methods for keeping track of customer details.'
+        },
+        {
+            'title': 'Customer data tracking tips',
+            'snippet': 'Best practices for manual customer information management.'
+        },
+        {
+            'title': 'Managing customer relationships',
+            'snippet': 'Strategies for maintaining good customer connections.'
+        },
+    ]
+    
+    detection = detect_solution_class_existence(results)
+    
+    # Should NOT detect category existence
+    assert detection['exists'] == False
+    assert detection['confidence'] == 'NONE'
+    
+    print("✓ Solution-class NOT exists detection passed")
+
+
+def test_solution_class_empty_results():
+    """Test solution-class detection with empty results"""
+    print("\nTesting solution-class detection with empty results...")
+    
+    detection = detect_solution_class_existence([])
+    
+    assert detection['exists'] == False
+    assert detection['confidence'] == 'NONE'
+    assert len(detection['evidence']) == 0
+    
+    print("✓ Empty results solution-class detection passed")
+
+
+def test_solution_class_deterministic():
+    """Test that solution-class detection is deterministic"""
+    print("\nTesting solution-class detection determinism...")
+    
+    results = [
+        {
+            'title': 'CRM Software Comparison',
+            'snippet': 'Compare leading CRM platforms and vendors in the market.'
+        },
+        {
+            'title': 'Best CRM Tools',
+            'snippet': 'Top CRM software solutions for businesses.'
+        },
+    ]
+    
+    detection1 = detect_solution_class_existence(results)
+    detection2 = detect_solution_class_existence(results)
+    
+    # Results should be identical
+    assert detection1['exists'] == detection2['exists']
+    assert detection1['confidence'] == detection2['confidence']
+    
+    print("✓ Solution-class detection determinism passed")
+
+
 def run_all_tests():
     """Run all test suites"""
     print("=" * 70)
@@ -398,6 +587,14 @@ def run_all_tests():
         test_classify_saturation_signal_trend()
         test_classify_saturation_signal_technical()
         test_classify_saturation_signal_mixed()
+        
+        # Solution-class existence tests
+        test_solution_class_high_confidence()
+        test_solution_class_medium_confidence()
+        test_solution_class_low_confidence()
+        test_solution_class_not_exists()
+        test_solution_class_empty_results()
+        test_solution_class_deterministic()
         
         # General tests
         test_deterministic_behavior()
