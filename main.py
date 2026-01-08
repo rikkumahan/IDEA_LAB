@@ -21,6 +21,39 @@ class IdeaInput(BaseModel):
     target_user: str
     user_claimed_frequency: str
 
+
+# ============================================================================
+# PART 2: STAGE 2 - USER SOLUTION COMPETITOR DETECTION
+# ============================================================================
+#
+# This is Stage 2 ONLY. Stage 1 behavior remains unchanged.
+# 
+# PURPOSE: Detect competitors specific to the user's solution (not just the problem)
+#
+# INPUT: Structured solution attributes (NOT marketing prose)
+# OUTPUT: List of commercial competitors offering similar solutions
+#
+# CONSTRAINTS:
+# - All logic is deterministic and rule-based
+# - No LLM reasoning, no embeddings, no AI judgment
+# - Stage 1 and Stage 2 are strictly separated
+# ============================================================================
+
+class UserSolution(BaseModel):
+    """
+    Structured description of the user's solution.
+    
+    This is NOT marketing prose - it's structured attributes that can be
+    used to generate deterministic search queries.
+    
+    All fields are required to generate precise competitor queries.
+    """
+    core_action: str  # e.g., "validate", "generate", "analyze", "automate"
+    input_required: str  # e.g., "startup idea text", "business plan", "meeting notes"
+    output_type: str  # e.g., "validation report", "competitor list", "summary"
+    target_user: str  # e.g., "startup founders", "product managers", "developers"
+    automation_level: str  # e.g., "AI-powered", "automated", "manual", "semi-automated"
+
 @app.post("/analyze-idea")
 def analyze_idea(data: IdeaInput):
     queries = generate_search_queries(data.problem)
@@ -758,13 +791,70 @@ def classify_problem_level(signals):
 # COMPETITION AND CONTENT SATURATION ANALYSIS
 # ============================================================================
 
-# Commercial vs DIY classification keywords
-COMMERCIAL_KEYWORDS = {
-    'pricing', 'subscription', 'enterprise', 'saas', 'platform',
-    'buy', 'purchase', 'license', 'trial', 'demo', 'signup',
-    'company', 'inc', 'corp', 'llc', 'business', 'plan', 'plans'
+# ============================================================================
+# PART 1: COMMERCIAL VS CONTENT CLASSIFICATION FIX
+# ============================================================================
+# 
+# ISSUE: Blogs, Reddit, and Quora are being misclassified as "commercial competitors"
+# 
+# FIX: A result may be classified as COMMERCIAL ONLY IF ALL conditions are true:
+# 1. The page is a FIRST-PARTY product or SaaS site (not a content/discussion site)
+# 2. The page explicitly offers the solution directly
+# 3. Strong product signals are present (pricing, signup, dashboard)
+# 4. The source is NOT: Reddit, Quora, Medium, review sites, listicles, blogs
+# 
+# PRECEDENCE: commercial > diy > content > unknown
+# ============================================================================
+
+# Content site domains that should NEVER be classified as commercial
+# These are sites that DISCUSS or REVIEW products, not first-party product sites
+CONTENT_SITE_DOMAINS = {
+    # Social/Discussion platforms
+    'reddit.com', 'quora.com', 'stackexchange.com', 'stackoverflow.com',
+    'hackernews.com', 'news.ycombinator.com',
+    
+    # Blogging platforms
+    'medium.com', 'substack.com', 'wordpress.com', 'blogger.com', 
+    'dev.to', 'hashnode.com', 'ghost.io',
+    
+    # Review/Comparison sites
+    'g2.com', 'capterra.com', 'trustpilot.com', 'producthunt.com',
+    'getapp.com', 'softwareadvice.com', 'trustradius.com',
+    
+    # Video platforms (reviews/tutorials)
+    'youtube.com', 'vimeo.com',
+    
+    # Q&A and forums
+    'answers.com', 'yahoo.com/answers',
 }
 
+# Strong product signals that indicate a FIRST-PARTY commercial site
+# These must be present along with other indicators
+STRONG_PRODUCT_SIGNALS = {
+    # Direct purchase/signup actions
+    'sign up', 'signup', 'get started', 'start free trial', 'free trial',
+    'create account', 'register now', 'join now', 'start now',
+    
+    # Pricing indicators
+    'pricing', 'plans', 'subscription', 'price', 'cost',
+    
+    # Product access
+    'dashboard', 'login', 'log in', 'access your account',
+    
+    # Business model
+    'saas', 'platform', 'software as a service',
+    
+    # Enterprise/commercial focus
+    'enterprise', 'business', 'teams', 'organizations',
+}
+
+# Commercial supporting keywords (weaker signals)
+COMMERCIAL_KEYWORDS = {
+    'buy', 'purchase', 'license', 'trial', 'demo',
+    'company', 'inc', 'corp', 'llc', 'plan'
+}
+
+# DIY/tutorial keywords
 DIY_KEYWORDS = {
     'how to', 'diy', 'custom', 'manual', 'open source',
     'github', 'python script', 'bash script', 'shell script', 'javascript code',
@@ -773,42 +863,183 @@ DIY_KEYWORDS = {
     'completely free', 'totally free', 'free forever', 'diy solution'
 }
 
-def classify_result_type(result):
+# Content/discussion keywords
+CONTENT_KEYWORDS = {
+    'review', 'comparison', 'vs', 'versus', 'best', 'top',
+    'guide', 'blog', 'article', 'post', 'discussion', 'forum',
+    'thread', 'comment', 'opinion', 'thoughts on', 'what do you think',
+    'listicle', 'roundup', 'collection'
+}
+
+
+def is_content_site(url):
     """
-    Classify search result as commercial or DIY based on keywords.
+    Check if URL belongs to a content/discussion site.
     
-    This is deterministic keyword matching (no ML/AI).
+    Content sites discuss, review, or compare products but are NOT
+    first-party product sites themselves.
     
     Args:
-        result: Search result dict with 'title' and 'snippet'
+        url: URL string to check
         
     Returns:
-        'commercial', 'diy', or 'unknown'
+        True if URL is from a content site, False otherwise
     """
+    if not url or not isinstance(url, str):
+        return False
+    
+    url_lower = url.lower()
+    
+    # Extract domain from URL (between :// and next /)
+    # Handle URLs with or without paths
+    if '://' not in url_lower:
+        return False
+    
+    # Get the part after ://
+    after_protocol = url_lower.split('://', 1)[1]
+    
+    # Extract domain (everything before first / or end of string)
+    if '/' in after_protocol:
+        domain_part = after_protocol.split('/')[0]
+    else:
+        domain_part = after_protocol
+    
+    # Remove port if present
+    if ':' in domain_part:
+        domain_part = domain_part.split(':')[0]
+    
+    # Check if domain matches any content site
+    for content_domain in CONTENT_SITE_DOMAINS:
+        # Match exact domain or any subdomain
+        # e.g., reddit.com, www.reddit.com, old.reddit.com, docs.reddit.com
+        if domain_part == content_domain or domain_part.endswith('.' + content_domain):
+            return True
+    
+    return False
+
+
+def classify_result_type(result):
+    """
+    Classify search result as commercial, diy, content, or unknown.
+    
+    CLASSIFICATION RULES (deterministic, no ML/AI):
+    
+    1. CONTENT (highest priority for content sites):
+       - URL is from Reddit, Quora, Medium, review sites, blogs
+       - These sites DISCUSS tools but don't offer them directly
+       
+    2. CONTENT (comparison/review articles):
+       - Contains review/comparison keywords (vs, review, best, comparison)
+       - Even if also contains product signals
+       
+    3. COMMERCIAL (only for first-party product sites):
+       - NOT a content site (rules 1-2 don't apply)
+       - Has STRONG product signals (signup, pricing, dashboard)
+       - Explicitly offers the solution directly
+       
+    4. DIY:
+       - Has DIY keywords (tutorials, open source, build your own)
+       - Not classified as content or commercial
+       
+    5. UNKNOWN:
+       - Doesn't match any of the above
+    
+    PRECEDENCE: commercial > diy > content > unknown
+    (But content site check and review/comparison check happen FIRST)
+    
+    Args:
+        result: Search result dict with 'title', 'snippet', and optionally 'url'
+        
+    Returns:
+        'commercial', 'diy', 'content', or 'unknown'
+    """
+    url = result.get('url', '')
     text = (
         (result.get("title") or "") + " " +
         (result.get("snippet") or "")
     ).lower()
     
+    # RULE 1: Check if this is a content/discussion site FIRST
+    # Content sites should NEVER be classified as commercial
+    if is_content_site(url):
+        logger.debug(f"Classified as CONTENT (content site domain): {url}")
+        return 'content'
+    
+    # Check for signal presence
+    has_strong_product = any(signal in text for signal in STRONG_PRODUCT_SIGNALS)
     has_commercial = any(kw in text for kw in COMMERCIAL_KEYWORDS)
     has_diy = any(kw in text for kw in DIY_KEYWORDS)
     
-    if has_commercial and not has_diy:
+    # RULE 2: Strong CONTENT indicators (comparison/review articles)
+    # These should be classified as content even if they mention pricing
+    # Check for strong comparison/review patterns
+    # Note: "best" and "top" must be followed by product-related words to avoid false positives
+    # like "best practices" which is not a product comparison
+    strong_content_patterns = [
+        'vs', 'versus', 'comparison', 'compare', 'review', 'reviews',
+        'best tool', 'best software', 'best app', 'best product', 'best solution',
+        'best crm', 'best platform', 'best service',
+        'top tool', 'top software', 'top app', 'top product',
+        'roundup', 'listicle', 'alternatives to'
+    ]
+    has_strong_content = any(pattern in text for pattern in strong_content_patterns)
+    
+    # Weaker content signals (only used in combination with other signals)
+    weak_content_signals = ['review', 'comparison', 'guide', 'blog', 'article']
+    has_weak_content = any(signal in text for signal in weak_content_signals)
+    
+    if has_strong_content:
+        # This is a comparison/review article, not a product page
+        logger.debug(f"Classified as CONTENT (comparison/review article): {url}")
+        return 'content'
+    
+    # RULE 3: COMMERCIAL classification (strict requirements)
+    # Must have STRONG product signals AND not be a content/review article
+    # This prevents review articles from being commercial just because they mention pricing
+    if has_strong_product and not has_diy and not has_weak_content:
+        logger.debug(f"Classified as COMMERCIAL (strong product signals): {url}")
         return 'commercial'
-    elif has_diy and not has_commercial:
+    
+    # RULE 4: DIY classification
+    if has_diy and not has_strong_product:
+        logger.debug(f"Classified as DIY (tutorial/open source): {url}")
         return 'diy'
-    else:
-        return 'unknown'  # Mixed or unclear
+    
+    # RULE 5: CONTENT classification (based on weak content keywords)
+    # Articles that discuss/review tools but aren't on known content domains
+    # Only classify as content if there are weak content keywords but NO strong product signals
+    if has_weak_content and not has_strong_product and not has_diy:
+        logger.debug(f"Classified as CONTENT (review/comparison): {url}")
+        return 'content'
+    
+    # RULE 6: Mixed signals or unclear
+    if has_strong_product and has_diy:
+        # Mixed signals - commercial wins (precedence rule)
+        logger.debug(f"Classified as COMMERCIAL (mixed signals, precedence): {url}")
+        return 'commercial'
+    
+    if has_commercial and not has_strong_product:
+        # Weak commercial signals without strong product signals
+        # Likely a review/discussion, classify as content
+        logger.debug(f"Classified as CONTENT (weak commercial signals): {url}")
+        return 'content'
+    
+    # Default: unknown
+    logger.debug(f"Classified as UNKNOWN (no clear signals): {url}")
+    return 'unknown'
 
 
 def separate_tool_workaround_results(tool_results, workaround_results):
     """
     Re-classify tool and workaround results to ensure bucket purity.
     
-    Move DIY results from tool_results to workaround_results.
-    Move commercial results from workaround_results to tool_results.
+    UPDATED for PART 1 FIX:
+    - Move COMMERCIAL results to tool_results
+    - Move DIY results to workaround_results  
+    - EXCLUDE CONTENT results (blogs, Reddit, Quora, reviews)
+    - Handle UNKNOWN results with logging
     
-    This fixes ISSUE 1: Query bucket mixing.
+    This fixes ISSUE 1: Query bucket mixing + content misclassification.
     
     Args:
         tool_results: Results from tool_queries
@@ -819,29 +1050,50 @@ def separate_tool_workaround_results(tool_results, workaround_results):
     """
     corrected_tool = []
     corrected_workaround = []
+    content_excluded_count = 0
     
     # Re-classify tool results
     for result in tool_results:
         result_type = classify_result_type(result)
         if result_type == 'commercial':
+            # True commercial competitor - keep in tool bucket
             corrected_tool.append(result)
         elif result_type == 'diy':
+            # DIY solution - move to workaround bucket
             corrected_workaround.append(result)
+        elif result_type == 'content':
+            # Content site (blog, Reddit, Quora, review) - EXCLUDE
+            # These are NOT competitors, just discussing the problem
+            content_excluded_count += 1
+            logger.debug(f"Excluding CONTENT from competitors: {result.get('url', 'unknown')}")
         else:
             # Unknown - keep in original bucket with warning
             corrected_tool.append(result)
-            logger.debug(f"Ambiguous tool result: {result.get('url', 'unknown')}")
+            logger.debug(f"Ambiguous tool result (unknown): {result.get('url', 'unknown')}")
     
     # Re-classify workaround results
     for result in workaround_results:
         result_type = classify_result_type(result)
         if result_type == 'diy':
+            # DIY/tutorial - keep in workaround bucket
             corrected_workaround.append(result)
         elif result_type == 'commercial':
+            # Commercial product - move to tool bucket
             corrected_tool.append(result)
+        elif result_type == 'content':
+            # Content site - EXCLUDE
+            content_excluded_count += 1
+            logger.debug(f"Excluding CONTENT from alternatives: {result.get('url', 'unknown')}")
         else:
             # Unknown - keep in original bucket
             corrected_workaround.append(result)
+    
+    # Log content exclusion statistics
+    if content_excluded_count > 0:
+        logger.info(
+            f"Excluded {content_excluded_count} content sites "
+            f"(blogs/Reddit/Quora/reviews) from competition analysis"
+        )
     
     # Deduplicate after reclassification
     corrected_tool = deduplicate_results(corrected_tool)
@@ -1325,4 +1577,205 @@ def analyze_market(data: IdeaInput):
         "problem": problem_analysis,
         "competition": competition_analysis,
         "content_saturation": content_analysis
+    }
+
+
+# ============================================================================
+# STAGE 2: USER-SOLUTION COMPETITOR DETECTION
+# ============================================================================
+
+def generate_solution_class_queries(solution: UserSolution):
+    """
+    Generate deterministic search queries based on user's solution attributes.
+    
+    This is STAGE 2 ONLY - generates queries specific to the user's solution,
+    not the problem space.
+    
+    RULES:
+    - Queries are rule-generated and deterministic
+    - Use static templates based on solution attributes
+    - No free-text input, only structured attributes
+    - No LLM rewriting or semantic expansion
+    
+    QUERY TEMPLATES:
+    - "{automation_level} {core_action} software"
+    - "{core_action} {output_type} tool"
+    - "{target_user} {core_action} platform"
+    - "automated {core_action} service"
+    
+    Args:
+        solution: UserSolution with structured attributes
+        
+    Returns:
+        List of search query strings (3-5 queries)
+    """
+    # Extract and normalize attributes
+    core_action = solution.core_action.lower().strip()
+    output_type = solution.output_type.lower().strip()
+    target_user = solution.target_user.lower().strip()
+    automation_level = solution.automation_level.lower().strip()
+    
+    # Generate queries using fixed templates
+    # Each template focuses on a different aspect of the solution
+    queries = [
+        # Template 1: Focus on automation + action
+        f"{automation_level} {core_action} software",
+        
+        # Template 2: Focus on action + output
+        f"{core_action} {output_type} tool",
+        
+        # Template 3: Focus on target user + action
+        f"{target_user} {core_action} platform",
+        
+        # Template 4: Generic automation + action
+        f"automated {core_action} service",
+    ]
+    
+    # Deduplicate queries (case-insensitive)
+    seen = set()
+    unique_queries = []
+    for query in queries:
+        normalized = query.lower().strip()
+        if normalized not in seen and len(normalized) > 5:  # Minimum length check
+            seen.add(normalized)
+            unique_queries.append(query)
+    
+    logger.info(f"Generated {len(unique_queries)} solution-class queries")
+    logger.debug(f"Solution-class queries: {unique_queries}")
+    
+    return unique_queries
+
+
+def extract_pricing_model(result):
+    """
+    Extract pricing model from search result.
+    
+    Deterministic keyword-based extraction (no AI).
+    
+    Args:
+        result: Search result dict with 'title' and 'snippet'
+        
+    Returns:
+        'free', 'freemium', 'paid', or 'unknown'
+    """
+    text = (
+        (result.get("title") or "") + " " +
+        (result.get("snippet") or "")
+    ).lower()
+    
+    # Check for free indicators
+    free_keywords = ['free forever', 'completely free', 'totally free', 'free plan', 'free tier']
+    if any(kw in text for kw in free_keywords):
+        return 'free'
+    
+    # Check for freemium indicators (free + paid tiers)
+    freemium_keywords = ['free trial', 'freemium', 'free and paid', 'upgrade to', 'premium plan']
+    if any(kw in text for kw in freemium_keywords):
+        return 'freemium'
+    
+    # Check for paid indicators
+    paid_keywords = ['pricing', 'subscription', 'price', '$', 'per month', 'per user']
+    if any(kw in text for kw in paid_keywords):
+        return 'paid'
+    
+    return 'unknown'
+
+
+def analyze_user_solution_competitors(solution: UserSolution):
+    """
+    Detect competitors specific to the user's solution (Stage 2).
+    
+    This is STAGE 2 ONLY - finds competitors offering similar solutions,
+    not just addressing the same problem space (which is Stage 1).
+    
+    PROCESS:
+    1. Generate solution-class queries (deterministic, template-based)
+    2. Run searches using these queries
+    3. Classify results using SAME classifier from Stage 1
+    4. Return ONLY commercial products (no blogs, Reddit, Quora, reviews)
+    
+    CONSTRAINTS:
+    - No ranking or scoring
+    - No comparison to user's product
+    - No LLM reasoning
+    - Strictly separated from Stage 1
+    
+    Args:
+        solution: UserSolution with structured attributes
+        
+    Returns:
+        Dict with:
+        - exists: bool (competitors found)
+        - count: int (number of commercial competitors)
+        - products: list of commercial product dicts
+    """
+    # Step 1: Generate solution-class queries
+    queries = generate_solution_class_queries(solution)
+    
+    # Step 2: Run searches
+    all_results = run_multiple_searches(queries)
+    
+    # Step 3: Deduplicate results
+    unique_results = deduplicate_results(all_results)
+    
+    # Step 4: Classify and filter to ONLY commercial products
+    commercial_products = []
+    
+    for result in unique_results:
+        result_type = classify_result_type(result)
+        
+        # Only include COMMERCIAL products
+        # Exclude: DIY, content (blogs/Reddit/Quora/reviews), unknown
+        if result_type == 'commercial':
+            # Extract product information
+            product_info = {
+                'name': result.get('title', 'Unknown Product'),
+                'url': result.get('url', ''),
+                'pricing_model': extract_pricing_model(result),
+                'snippet': result.get('snippet', ''),
+            }
+            commercial_products.append(product_info)
+            
+            logger.debug(f"Found commercial competitor: {product_info['name']}")
+        else:
+            # Log excluded results for debugging
+            logger.debug(
+                f"Excluded from competitors (type={result_type}): "
+                f"{result.get('url', 'unknown')}"
+            )
+    
+    exists = len(commercial_products) > 0
+    count = len(commercial_products)
+    
+    logger.info(
+        f"Stage 2: Found {count} commercial competitors for user solution "
+        f"(excluded {len(unique_results) - count} non-commercial results)"
+    )
+    
+    return {
+        'exists': exists,
+        'count': count,
+        'products': commercial_products,
+        'queries_used': queries,
+    }
+
+
+@app.post("/analyze-user-solution")
+def analyze_user_solution(solution: UserSolution):
+    """
+    Stage 2 endpoint: Analyze competitors for user's specific solution.
+    
+    This is STAGE 2 - detects competitors offering similar solutions.
+    Strictly separated from Stage 1 (problem analysis).
+    
+    Args:
+        solution: UserSolution with structured attributes
+        
+    Returns:
+        Dict with user_solution_competitors analysis
+    """
+    competitors = analyze_user_solution_competitors(solution)
+    
+    return {
+        'user_solution_competitors': competitors
     }
