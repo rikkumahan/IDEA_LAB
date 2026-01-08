@@ -1022,6 +1022,24 @@ CATEGORY_NAME_PATTERNS = {
     'service', 'app', 'suite', 'management'
 }
 
+# Solution-class existence detection thresholds
+# These determine confidence levels for category existence
+SOLUTION_CLASS_THRESHOLDS = {
+    # Minimum ratio of results with solution-class language for detection
+    'solution_language_min': 0.3,       # 30% of results
+    
+    # Comparison article thresholds (strong indicator of established category)
+    'comparison_high': 0.3,             # 30% comparison articles = HIGH confidence
+    'comparison_medium': 0.2,           # 20% comparison articles = MEDIUM confidence
+    
+    # Market maturity thresholds (indicates recognized industry)
+    'market_maturity_min': 0.2,         # 20% market/industry language
+    
+    # Solution language thresholds for different confidence levels
+    'solution_medium': 0.5,             # 50% solution language = MEDIUM confidence
+    'solution_low': 0.4,                # 40% solution language = LOW confidence
+}
+
 
 def detect_solution_class_existence(tool_results):
     """
@@ -1104,30 +1122,32 @@ def detect_solution_class_existence(tool_results):
     # Collect evidence
     evidence = []
     
-    if solution_class_ratio > 0.3:
+    if solution_class_ratio > SOLUTION_CLASS_THRESHOLDS['solution_language_min']:
         evidence.append(f"{solution_class_ratio:.0%} of results mention solution/product language")
     
-    if comparison_ratio > 0.2:
+    if comparison_ratio > SOLUTION_CLASS_THRESHOLDS['comparison_medium']:
         evidence.append(f"{comparison_ratio:.0%} of results are comparison/review articles")
     
-    if market_maturity_ratio > 0.2:
+    if market_maturity_ratio > SOLUTION_CLASS_THRESHOLDS['market_maturity_min']:
         evidence.append(f"{market_maturity_ratio:.0%} of results mention market/industry")
     
     # Deterministic rules for existence and confidence
     # Rule 1: HIGH confidence - comparison articles + market language (established category)
-    if comparison_ratio > 0.3 and market_maturity_ratio > 0.2:
+    if (comparison_ratio > SOLUTION_CLASS_THRESHOLDS['comparison_high'] and 
+        market_maturity_ratio > SOLUTION_CLASS_THRESHOLDS['market_maturity_min']):
         exists = True
         confidence = 'HIGH'
         evidence.append("Strong category signals: comparison articles + market maturity indicators")
     
     # Rule 2: MEDIUM confidence - solution-class language + some comparisons
-    elif solution_class_ratio > 0.5 and comparison_ratio > 0.2:
+    elif (solution_class_ratio > SOLUTION_CLASS_THRESHOLDS['solution_medium'] and 
+          comparison_ratio > SOLUTION_CLASS_THRESHOLDS['comparison_medium']):
         exists = True
         confidence = 'MEDIUM'
         evidence.append("Moderate category signals: solution language + comparison articles")
     
     # Rule 3: LOW confidence - solution-class language but no comparisons
-    elif solution_class_ratio > 0.4:
+    elif solution_class_ratio > SOLUTION_CLASS_THRESHOLDS['solution_low']:
         exists = True
         confidence = 'LOW'
         evidence.append("Weak category signals: solution language present but limited comparisons")
