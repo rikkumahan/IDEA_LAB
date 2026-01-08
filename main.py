@@ -869,6 +869,8 @@ DIY_KEYWORDS = {
 
 # Content/discussion keywords
 # BLOCKING BUG FIX: Added newsletter, guide variations to prevent misclassification
+# NOTE: Compound phrases (e.g., 'weekly newsletter') are intentional and necessary
+# because pattern matching looks for exact substring matches in text
 CONTENT_KEYWORDS = {
     'review', 'comparison', 'vs', 'versus', 'best', 'top',
     'guide', 'blog', 'article', 'post', 'discussion', 'forum',
@@ -986,6 +988,8 @@ def classify_result_type(result):
     # Note: "best" and "top" must be followed by product-related words to avoid false positives
     # like "best practices" which is not a product comparison
     # BLOCKING BUG FIX: Added guide and newsletter patterns to prevent misclassification
+    # NOTE: Some overlap with CONTENT_KEYWORDS is intentional - these are STRONG signals
+    # that override product signals, while CONTENT_KEYWORDS are weaker signals
     strong_content_patterns = [
         'vs', 'versus', 'comparison', 'compare', 'review', 'reviews',
         'best tool', 'best software', 'best app', 'best product', 'best solution',
