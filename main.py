@@ -813,6 +813,10 @@ CONTENT_SITE_DOMAINS = {
     'reddit.com', 'quora.com', 'stackexchange.com', 'stackoverflow.com',
     'hackernews.com', 'news.ycombinator.com',
     
+    # Social media platforms (LinkedIn, Facebook)
+    # BLOCKING BUG FIX: These sites host discussions/posts about products, not first-party products
+    'linkedin.com', 'facebook.com',
+    
     # Blogging platforms
     'medium.com', 'substack.com', 'wordpress.com', 'blogger.com', 
     'dev.to', 'hashnode.com', 'ghost.io',
@@ -864,11 +868,17 @@ DIY_KEYWORDS = {
 }
 
 # Content/discussion keywords
+# BLOCKING BUG FIX: Added newsletter, guide variations to prevent misclassification
 CONTENT_KEYWORDS = {
     'review', 'comparison', 'vs', 'versus', 'best', 'top',
     'guide', 'blog', 'article', 'post', 'discussion', 'forum',
     'thread', 'comment', 'opinion', 'thoughts on', 'what do you think',
-    'listicle', 'roundup', 'collection'
+    'listicle', 'roundup', 'collection',
+    # Newsletter-specific keywords
+    'newsletter', 'subscribe', 'weekly newsletter', 'monthly newsletter',
+    # Guide variations
+    'buyer\'s guide', 'buyers guide', 'ultimate guide', 'complete guide',
+    'how-to guide', 'beginner\'s guide', 'beginners guide'
 }
 
 
@@ -975,12 +985,18 @@ def classify_result_type(result):
     # Check for strong comparison/review patterns
     # Note: "best" and "top" must be followed by product-related words to avoid false positives
     # like "best practices" which is not a product comparison
+    # BLOCKING BUG FIX: Added guide and newsletter patterns to prevent misclassification
     strong_content_patterns = [
         'vs', 'versus', 'comparison', 'compare', 'review', 'reviews',
         'best tool', 'best software', 'best app', 'best product', 'best solution',
         'best crm', 'best platform', 'best service',
         'top tool', 'top software', 'top app', 'top product',
-        'roundup', 'listicle', 'alternatives to'
+        'roundup', 'listicle', 'alternatives to',
+        # Guide patterns (must be strong to avoid false positives)
+        'ultimate guide', 'complete guide', 'buyer\'s guide', 'buyers guide',
+        'beginner\'s guide', 'beginners guide', 'how-to guide',
+        # Newsletter patterns
+        'newsletter', 'weekly newsletter', 'monthly newsletter', 'subscribe to'
     ]
     has_strong_content = any(pattern in text for pattern in strong_content_patterns)
     
