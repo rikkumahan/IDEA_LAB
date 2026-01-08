@@ -266,14 +266,23 @@ def test_normalized_problem_in_queries():
     )
     
     for query in all_queries:
-        # Should be lowercase
-        assert query == query.lower() or query[0].isupper(), \
-            f"Query should use normalized text: '{query}'"
+        # All queries should be lowercase (normalized)
+        assert query == query.lower(), \
+            f"Query should be lowercase (normalized): '{query}'"
         
-        # Should contain normalized words (lemmatized)
-        query_lower = query.lower()
-        # At minimum, should contain some form of the problem
-        assert len(query_lower) > 0, "Query should not be empty"
+        # Query should not be empty
+        assert len(query) > 0, "Query should not be empty"
+        
+        # Query should contain at least one word from the normalized problem
+        # This verifies that normalization was applied
+        normalized = normalize_problem_text(problem)
+        normalized_words = set(normalized.split())
+        query_words = set(query.split())
+        
+        # Should have some overlap (query contains normalized problem text)
+        overlap = normalized_words & query_words
+        assert len(overlap) > 0, \
+            f"Query '{query}' should contain words from normalized problem '{normalized}'"
     
     print("✓ Normalized problem in queries tests passed")
 

@@ -341,10 +341,9 @@ def normalize_problem_text(problem: str) -> str:
     This function:
     1. Converts to lowercase
     2. Tokenizes
-    3. Lemmatizes (reduces words to base forms)
-    4. Removes stopwords
-    5. Keeps only nouns and verbs (core content words)
-    6. Joins back into a normalized phrase
+    3. Removes stopwords (excluding important negations like 'not', 'no', 'never')
+    4. Lemmatizes (reduces words to base forms)
+    5. Joins back into a normalized phrase
     
     This is DETERMINISTIC - same input always produces same output.
     NO LLM, embeddings, or semantic reasoning.
@@ -353,14 +352,14 @@ def normalize_problem_text(problem: str) -> str:
         problem: Raw problem text from user input
         
     Returns:
-        Normalized problem text (core noun/verb phrase)
+        Normalized problem text (lowercase, lemmatized, core content words)
         
     Example:
         Input:  "Managing multiple spreadsheets daily"
         Output: "manage multiple spreadsheet daily"
         
         Input:  "Frustrated with manual data entry"
-        Output: "frustrated manual data entry"
+        Output: "frustrate manual data entry"
     """
     if not problem or not problem.strip():
         return ""
