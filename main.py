@@ -684,12 +684,13 @@ def classify_problem_level(signals):
     Returns:
         Problem level string: "DRASTIC", "SEVERE", "MODERATE", or "LOW"
     """
+    # Input validation: ensure all required keys exist with default 0
+    intensity_count = signals.get("intensity_count", 0)
+    complaint_count = signals.get("complaint_count", 0)
+    workaround_count = signals.get("workaround_count", 0)
+    
     # GUARDRAIL 1: Zero-signal sanity check (defensive programming)
-    total_signals = (
-        signals["intensity_count"] + 
-        signals["complaint_count"] + 
-        signals["workaround_count"]
-    )
+    total_signals = intensity_count + complaint_count + workaround_count
     
     if total_signals == 0:
         logger.info("Zero signals detected - returning LOW")
@@ -697,24 +698,24 @@ def classify_problem_level(signals):
     
     # GUARDRAIL 2: Workaround cap when intensity/complaints are minimal
     # Prevents workaround-only problems from inflating severity
-    effective_workaround = signals["workaround_count"]
-    if signals["intensity_count"] == 0 and signals["complaint_count"] <= 1:
-        effective_workaround = min(signals["workaround_count"], 3)
-        if effective_workaround < signals["workaround_count"]:
+    effective_workaround = workaround_count
+    if intensity_count == 0 and complaint_count <= 1:
+        effective_workaround = min(workaround_count, 3)
+        if effective_workaround < workaround_count:
             logger.info(
-                f"Applying workaround cap: intensity=0, complaints={signals['complaint_count']}, "
-                f"capping workaround from {signals['workaround_count']} to {effective_workaround}"
+                f"Applying workaround cap: intensity=0, complaints={complaint_count}, "
+                f"capping workaround from {workaround_count} to {effective_workaround}"
             )
     
     # Calculate score with capped workaround count
     score = (
-        3 * signals["intensity_count"] +
-        2 * signals["complaint_count"] +
+        3 * intensity_count +
+        2 * complaint_count +
         1 * effective_workaround
     )
     
     # Compute intensity level for guardrail checks
-    intensity_level = normalize_level(signals["intensity_count"])
+    intensity_level = normalize_level(intensity_count)
     
     # Initial classification based on score
     if score >= 15:
@@ -736,7 +737,7 @@ def classify_problem_level(signals):
     
     # GUARDRAIL 4: SEVERE requires intensity_count >= 1
     # Prevents false urgency from complaint/workaround volume alone
-    if problem_level == "SEVERE" and signals["intensity_count"] == 0:
+    if problem_level == "SEVERE" and intensity_count == 0:
         logger.info(
             f"Applying SEVERE guardrail: intensity_count=0, "
             f"downgrading from SEVERE to MODERATE"
@@ -747,7 +748,7 @@ def classify_problem_level(signals):
     assert problem_level != "DRASTIC" or intensity_level == "HIGH", \
         f"DRASTIC problem level requires HIGH intensity_level, got {intensity_level}"
     
-    assert problem_level != "SEVERE" or signals["intensity_count"] >= 1, \
-        f"SEVERE problem level requires intensity_count >= 1, got {signals['intensity_count']}"
+    assert problem_level != "SEVERE" or intensity_count >= 1, \
+        f"SEVERE problem level requires intensity_count >= 1, got {intensity_count}"
     
     return problem_level
