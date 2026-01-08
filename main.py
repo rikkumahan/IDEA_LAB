@@ -752,3 +752,577 @@ def classify_problem_level(signals):
         f"SEVERE problem level requires intensity_count >= 1, got {intensity_count}"
     
     return problem_level
+
+
+# ============================================================================
+# COMPETITION AND CONTENT SATURATION ANALYSIS
+# ============================================================================
+
+# Commercial vs DIY classification keywords
+COMMERCIAL_KEYWORDS = {
+    'pricing', 'subscription', 'enterprise', 'saas', 'platform',
+    'buy', 'purchase', 'license', 'trial', 'demo', 'signup',
+    'company', 'inc', 'corp', 'llc', 'business', 'plan', 'plans'
+}
+
+DIY_KEYWORDS = {
+    'how to', 'diy', 'custom', 'manual', 'open source',
+    'github', 'python script', 'bash script', 'shell script', 'javascript code',
+    'code snippet', 'build your own', 'create your own',
+    'homebrew', 'self-hosted', 'tutorial', 'free and open',
+    'completely free', 'totally free', 'free forever', 'diy solution'
+}
+
+def classify_result_type(result):
+    """
+    Classify search result as commercial or DIY based on keywords.
+    
+    This is deterministic keyword matching (no ML/AI).
+    
+    Args:
+        result: Search result dict with 'title' and 'snippet'
+        
+    Returns:
+        'commercial', 'diy', or 'unknown'
+    """
+    text = (
+        (result.get("title") or "") + " " +
+        (result.get("snippet") or "")
+    ).lower()
+    
+    has_commercial = any(kw in text for kw in COMMERCIAL_KEYWORDS)
+    has_diy = any(kw in text for kw in DIY_KEYWORDS)
+    
+    if has_commercial and not has_diy:
+        return 'commercial'
+    elif has_diy and not has_commercial:
+        return 'diy'
+    else:
+        return 'unknown'  # Mixed or unclear
+
+
+def separate_tool_workaround_results(tool_results, workaround_results):
+    """
+    Re-classify tool and workaround results to ensure bucket purity.
+    
+    Move DIY results from tool_results to workaround_results.
+    Move commercial results from workaround_results to tool_results.
+    
+    This fixes ISSUE 1: Query bucket mixing.
+    
+    Args:
+        tool_results: Results from tool_queries
+        workaround_results: Results from workaround_queries
+        
+    Returns:
+        Tuple of (corrected_tool_results, corrected_workaround_results)
+    """
+    corrected_tool = []
+    corrected_workaround = []
+    
+    # Re-classify tool results
+    for result in tool_results:
+        result_type = classify_result_type(result)
+        if result_type == 'commercial':
+            corrected_tool.append(result)
+        elif result_type == 'diy':
+            corrected_workaround.append(result)
+        else:
+            # Unknown - keep in original bucket with warning
+            corrected_tool.append(result)
+            logger.debug(f"Ambiguous tool result: {result.get('url', 'unknown')}")
+    
+    # Re-classify workaround results
+    for result in workaround_results:
+        result_type = classify_result_type(result)
+        if result_type == 'diy':
+            corrected_workaround.append(result)
+        elif result_type == 'commercial':
+            corrected_tool.append(result)
+        else:
+            # Unknown - keep in original bucket
+            corrected_workaround.append(result)
+    
+    # Deduplicate after reclassification
+    corrected_tool = deduplicate_results(corrected_tool)
+    corrected_workaround = deduplicate_results(corrected_workaround)
+    
+    return corrected_tool, corrected_workaround
+
+
+def compute_competition_pressure(competitor_count, competition_type='commercial'):
+    """
+    Compute competition pressure level based on competitor count.
+    
+    This implements ISSUE 4: Deterministic competition pressure rules.
+    
+    Thresholds:
+    - Commercial: LOW (0-3), MEDIUM (4-9), HIGH (10+)
+    - DIY: LOW (0-6), MEDIUM (7-19), HIGH (20+) [2x tolerance]
+    
+    Args:
+        competitor_count: Number of competitors found
+        competition_type: 'commercial' or 'diy'
+        
+    Returns:
+        "LOW", "MEDIUM", or "HIGH"
+    """
+    # Adjust thresholds based on competition type
+    if competition_type == 'diy':
+        # DIY workarounds are less threatening than commercial competitors
+        # Double the thresholds (more tolerance for workarounds)
+        low_threshold = 6
+        high_threshold = 20
+    else:  # commercial
+        # Standard thresholds for commercial competitors
+        low_threshold = 3
+        high_threshold = 10
+    
+    # Apply thresholds
+    if competitor_count <= low_threshold:
+        pressure = "LOW"
+    elif competitor_count < high_threshold:
+        pressure = "MEDIUM"
+    else:
+        pressure = "HIGH"
+    
+    logger.info(
+        f"Competition pressure: {pressure} "
+        f"({competitor_count} {competition_type} competitors)"
+    )
+    
+    return pressure
+
+
+# Content saturation classification keywords
+CLICKBAIT_SIGNALS = {
+    # Clickbait patterns
+    'top 10', 'best of', 'you won\'t believe', 'shocking',
+    'ultimate guide', 'secret', 'hack', 'trick',
+    'one simple', 'this will change', 'must read',
+    # Low-value patterns
+    'listicle', 'roundup', 'collection', 'compilation'
+}
+
+TREND_SIGNALS = {
+    # Year-specific (transient)
+    '2024', '2025', '2026',
+    # Event-specific
+    'pandemic', 'covid', 'lockdown', 'new normal',
+    # Trend/fad indicators
+    'trending', 'hot topic', 'latest', 'brand new',
+    'just released', 'this week', 'this month'
+}
+
+TECHNICAL_SIGNALS = {
+    # Technical depth
+    'how to', 'tutorial', 'guide', 'documentation',
+    'implementation', 'architecture', 'algorithm',
+    'step by step', 'walkthrough', 'example',
+    # Problem-solving
+    'solution', 'fix', 'debugging', 'troubleshooting',
+    'optimize', 'improve', 'automate'
+}
+
+
+def classify_saturation_signal(content_count, blog_results):
+    """
+    Classify whether high content count is NEGATIVE or NEUTRAL.
+    
+    This implements ISSUE 3: Content saturation interpretation rules.
+    
+    Rules (deterministic, no ML):
+    1. If content_count < 6: NEUTRAL (low saturation)
+    2. If >40% clickbait content: NEGATIVE (low-quality)
+    3. If >50% trend/year content: NEGATIVE (transient fad)
+    4. If >50% technical content: NEUTRAL (evergreen)
+    5. Otherwise: NEUTRAL (benefit of doubt)
+    
+    Args:
+        content_count: Number of blog/guide results
+        blog_results: List of search results from blog_queries
+        
+    Returns:
+        "NEGATIVE" or "NEUTRAL"
+    """
+    # Rule 1: Low count is always neutral
+    if content_count < 6:
+        return "NEUTRAL"
+    
+    # Count signal occurrences
+    clickbait_count = 0
+    trend_count = 0
+    technical_count = 0
+    
+    for result in blog_results:
+        text = (
+            (result.get('title') or '') + ' ' + 
+            (result.get('snippet') or '')
+        ).lower()
+        
+        if any(signal in text for signal in CLICKBAIT_SIGNALS):
+            clickbait_count += 1
+        
+        if any(signal in text for signal in TREND_SIGNALS):
+            trend_count += 1
+        
+        if any(signal in text for signal in TECHNICAL_SIGNALS):
+            technical_count += 1
+    
+    # Compute ratios
+    clickbait_ratio = clickbait_count / content_count
+    trend_ratio = trend_count / content_count
+    technical_ratio = technical_count / content_count
+    
+    # Rule 2: High clickbait ratio → NEGATIVE
+    if clickbait_ratio > 0.4:
+        logger.info(
+            f"Content saturation is NEGATIVE: {clickbait_ratio:.1%} clickbait "
+            f"({clickbait_count}/{content_count} results)"
+        )
+        return "NEGATIVE"
+    
+    # Rule 3: High trend ratio → NEGATIVE
+    if trend_ratio > 0.5:
+        logger.info(
+            f"Content saturation is NEGATIVE: {trend_ratio:.1%} trend content "
+            f"({trend_count}/{content_count} results)"
+        )
+        return "NEGATIVE"
+    
+    # Rule 4: High technical ratio → NEUTRAL
+    if technical_ratio > 0.5:
+        logger.info(
+            f"Content saturation is NEUTRAL: {technical_ratio:.1%} technical "
+            f"({technical_count}/{content_count} results)"
+        )
+        return "NEUTRAL"
+    
+    # Rule 5: Default to NEUTRAL
+    logger.info("Content saturation is NEUTRAL: Mixed quality, defaulting to neutral")
+    return "NEUTRAL"
+
+
+# Solution-class existence detection keywords
+# Organized by signal type for easier maintenance
+COMPARISON_SIGNALS = {
+    'vs', 'versus', 'comparison', 'alternatives to',
+    'best', 'top', 'leading', 'compare'
+}
+
+MARKET_MATURITY_SIGNALS = {
+    'market', 'industry', 'providers', 'vendors',
+    'options', 'solutions available', 'choose from'
+}
+
+SOLUTION_CLASS_SIGNALS = {
+    # Category/market indicators
+    'software', 'platform', 'tool', 'solution', 'system',
+    'service', 'product', 'application', 'app',
+}.union(COMPARISON_SIGNALS).union(MARKET_MATURITY_SIGNALS)
+
+# Category name extraction patterns
+# Purpose: Used to extract potential category names from text (e.g., "CRM software")
+# Overlap with SOLUTION_CLASS_SIGNALS is intentional - these patterns help identify
+# specific category phrases like "project management software" or "CRM platform"
+CATEGORY_NAME_PATTERNS = {
+    'software', 'platform', 'tools', 'solution', 'system',
+    'service', 'app', 'suite', 'management'
+}
+
+# Solution-class existence detection thresholds
+# These determine confidence levels for category existence
+SOLUTION_CLASS_THRESHOLDS = {
+    # Minimum ratio of results with solution-class language for detection
+    'solution_language_min': 0.3,       # 30% of results
+    
+    # Comparison article thresholds (strong indicator of established category)
+    'comparison_high': 0.3,             # 30% comparison articles = HIGH confidence
+    'comparison_medium': 0.2,           # 20% comparison articles = MEDIUM confidence
+    
+    # Market maturity thresholds (indicates recognized industry)
+    'market_maturity_min': 0.2,         # 20% market/industry language
+    
+    # Solution language thresholds for different confidence levels
+    'solution_medium': 0.5,             # 50% solution language = MEDIUM confidence
+    'solution_low': 0.4,                # 40% solution language = LOW confidence
+    
+    # Output limits
+    'category_indicators_limit': 10,    # Max unique category indicators to return
+}
+
+
+def detect_solution_class_existence(tool_results):
+    """
+    Detect whether a dedicated product category/solution-class exists.
+    
+    This is a product-agnostic market signal that indicates market maturity:
+    - If a category exists (e.g., "CRM software", "project management tools"),
+      the market has recognized this problem as worthy of specialized products
+    - If no category exists, this may be a novel/emerging problem space
+    
+    Detection rules (deterministic):
+    1. Check if results mention category/comparison language
+    2. Look for multiple products being discussed together (comparison articles)
+    3. Detect market/industry language suggesting established category
+    
+    Args:
+        tool_results: Commercial product search results
+        
+    Returns:
+        Dict with:
+        - exists: True/False (category exists)
+        - confidence: LOW/MEDIUM/HIGH
+        - evidence: List of signals detected
+    """
+    if not tool_results:
+        return {
+            'exists': False,
+            'confidence': 'NONE',
+            'evidence': [],
+            'category_indicators': []
+        }
+    
+    # Count signal occurrences
+    solution_class_count = 0
+    comparison_count = 0
+    market_maturity_count = 0
+    category_indicators = []
+    
+    for result in tool_results:
+        text = (
+            (result.get('title') or '') + ' ' + 
+            (result.get('snippet') or '')
+        ).lower()
+        
+        # Check for solution-class signals
+        if any(signal in text for signal in SOLUTION_CLASS_SIGNALS):
+            solution_class_count += 1
+        
+        # Check for comparison signals (strong indicator of category)
+        if any(signal in text for signal in COMPARISON_SIGNALS):
+            comparison_count += 1
+        
+        # Check for market maturity signals
+        if any(signal in text for signal in MARKET_MATURITY_SIGNALS):
+            market_maturity_count += 1
+        
+        # Extract potential category names (e.g., "CRM software", "project management tools")
+        for pattern in CATEGORY_NAME_PATTERNS:
+            if pattern in text:
+                # Extract a few words before and after the pattern
+                words = text.split()
+                for i, word in enumerate(words):
+                    if pattern in word:
+                        # Get context around the pattern (2 words before, pattern, 2 words after)
+                        start = max(0, i - 2)
+                        end = min(len(words), i + 3)
+                        context = ' '.join(words[start:end])
+                        if len(context) > 5:  # Meaningful context
+                            category_indicators.append(context)
+    
+    total_results = len(tool_results)
+    
+    # Compute ratios
+    solution_class_ratio = solution_class_count / total_results
+    comparison_ratio = comparison_count / total_results
+    market_maturity_ratio = market_maturity_count / total_results
+    
+    # Collect evidence
+    evidence = []
+    
+    if solution_class_ratio > SOLUTION_CLASS_THRESHOLDS['solution_language_min']:
+        evidence.append(f"{solution_class_ratio:.0%} of results mention solution/product language")
+    
+    if comparison_ratio > SOLUTION_CLASS_THRESHOLDS['comparison_medium']:
+        evidence.append(f"{comparison_ratio:.0%} of results are comparison/review articles")
+    
+    if market_maturity_ratio > SOLUTION_CLASS_THRESHOLDS['market_maturity_min']:
+        evidence.append(f"{market_maturity_ratio:.0%} of results mention market/industry")
+    
+    # Deterministic rules for existence and confidence
+    # Rule 1: HIGH confidence - comparison articles + market language (established category)
+    if (comparison_ratio > SOLUTION_CLASS_THRESHOLDS['comparison_high'] and 
+        market_maturity_ratio > SOLUTION_CLASS_THRESHOLDS['market_maturity_min']):
+        exists = True
+        confidence = 'HIGH'
+        evidence.append("Strong category signals: comparison articles + market maturity indicators")
+    
+    # Rule 2: MEDIUM confidence - solution-class language + some comparisons
+    elif (solution_class_ratio > SOLUTION_CLASS_THRESHOLDS['solution_medium'] and 
+          comparison_ratio > SOLUTION_CLASS_THRESHOLDS['comparison_medium']):
+        exists = True
+        confidence = 'MEDIUM'
+        evidence.append("Moderate category signals: solution language + comparison articles")
+    
+    # Rule 3: LOW confidence - solution-class language but no comparisons
+    elif solution_class_ratio > SOLUTION_CLASS_THRESHOLDS['solution_low']:
+        exists = True
+        confidence = 'LOW'
+        evidence.append("Weak category signals: solution language present but limited comparisons")
+    
+    # Rule 4: No category detected
+    else:
+        exists = False
+        confidence = 'NONE'
+        evidence.append("No strong category signals detected - may be novel/emerging problem space")
+    
+    # Deduplicate category indicators (limit to configured max)
+    # Deduplicate first, then limit to ensure we get up to limit unique items
+    limit = SOLUTION_CLASS_THRESHOLDS['category_indicators_limit']
+    unique_categories = list(set(category_indicators))[:limit]
+    
+    logger.info(
+        f"Solution-class existence: {exists} (confidence: {confidence}) - "
+        f"{len(evidence)} signals detected"
+    )
+    
+    return {
+        'exists': exists,
+        'confidence': confidence,
+        'evidence': evidence,
+        'category_indicators': unique_categories
+    }
+
+
+def analyze_competition(problem: str):
+    """
+    Analyze competition pressure for a problem.
+    
+    This implements ISSUE 2: Competition pressure computation.
+    
+    Returns:
+        Dict with commercial and DIY competition metrics
+    """
+    queries = generate_search_queries(problem)
+    
+    # Run tool queries to find competitors
+    tool_results = run_multiple_searches(queries["tool_queries"])
+    tool_results = deduplicate_results(tool_results)
+    
+    # Run workaround queries to find DIY alternatives
+    workaround_results = run_multiple_searches(queries["workaround_queries"])
+    workaround_results = deduplicate_results(workaround_results)
+    
+    # Separate commercial vs DIY (fixes ISSUE 1: bucket mixing)
+    tool_results, workaround_results = separate_tool_workaround_results(
+        tool_results, workaround_results
+    )
+    
+    commercial_count = len(tool_results)
+    diy_count = len(workaround_results)
+    
+    # Compute pressure levels (ISSUE 4: deterministic thresholds)
+    commercial_pressure = compute_competition_pressure(
+        commercial_count, 
+        competition_type='commercial'
+    )
+    diy_pressure = compute_competition_pressure(
+        diy_count, 
+        competition_type='diy'
+    )
+    
+    # Overall pressure: worst of commercial or DIY
+    if commercial_pressure == "HIGH" or diy_pressure == "HIGH":
+        overall_pressure = "HIGH"
+    elif commercial_pressure == "MEDIUM" or diy_pressure == "MEDIUM":
+        overall_pressure = "MEDIUM"
+    else:
+        overall_pressure = "LOW"
+    
+    # Detect solution-class existence (product category maturity signal)
+    solution_class = detect_solution_class_existence(tool_results)
+    
+    return {
+        "commercial_competitors": {
+            "count": commercial_count,
+            "pressure": commercial_pressure,
+            "top_5": [
+                {'title': r.get('title'), 'url': r.get('url')}
+                for r in tool_results[:5]
+            ]
+        },
+        "diy_alternatives": {
+            "count": diy_count,
+            "pressure": diy_pressure,
+            "top_5": [
+                {'title': r.get('title'), 'url': r.get('url')}
+                for r in workaround_results[:5]
+            ]
+        },
+        "overall_pressure": overall_pressure,
+        "solution_class_exists": solution_class,
+        "queries_used": {
+            "tool_queries": queries["tool_queries"],
+            "workaround_queries": queries["workaround_queries"]
+        }
+    }
+
+
+def analyze_content_saturation(problem: str):
+    """
+    Analyze content saturation for a problem.
+    
+    This implements ISSUE 2: Content saturation computation.
+    
+    Returns:
+        Dict with content saturation metrics
+    """
+    queries = generate_search_queries(problem)
+    
+    # Run blog queries to find educational content
+    blog_results = run_multiple_searches(queries["blog_queries"])
+    blog_results = deduplicate_results(blog_results)
+    
+    content_count = len(blog_results)
+    
+    # Deterministic thresholds for saturation level
+    if content_count >= 15:
+        saturation_level = "HIGH"
+    elif content_count >= 6:
+        saturation_level = "MEDIUM"
+    else:
+        saturation_level = "LOW"
+    
+    # Classify as NEGATIVE or NEUTRAL (ISSUE 3: interpretation rules)
+    saturation_signal = classify_saturation_signal(content_count, blog_results)
+    
+    return {
+        "content_count": content_count,
+        "saturation_level": saturation_level,
+        "saturation_signal": saturation_signal,
+        "queries_used": queries["blog_queries"],
+        "top_5": [
+            {'title': r.get('title'), 'url': r.get('url')}
+            for r in blog_results[:5]
+        ]
+    }
+
+
+@app.post("/analyze-market")
+def analyze_market(data: IdeaInput):
+    """
+    Comprehensive market analysis combining problem severity, competition, and content.
+    
+    This is the new endpoint that uses ALL query buckets:
+    - complaint_queries → problem severity
+    - tool_queries + workaround_queries → competition pressure
+    - blog_queries → content saturation
+    
+    Returns:
+        Dict with problem, competition, and content_saturation analyses
+    """
+    # Problem severity analysis (existing)
+    problem_analysis = analyze_idea(data)
+    
+    # Competition analysis (new - ISSUE 2)
+    competition_analysis = analyze_competition(data.problem)
+    
+    # Content saturation analysis (new - ISSUE 2)
+    content_analysis = analyze_content_saturation(data.problem)
+    
+    return {
+        "problem": problem_analysis,
+        "competition": competition_analysis,
+        "content_saturation": content_analysis
+    }
