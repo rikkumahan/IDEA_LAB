@@ -4,8 +4,6 @@ Tests deterministic NLP preprocessing and signal extraction.
 """
 
 import sys
-sys.path.insert(0, '/home/runner/work/IDEA_LAB/IDEA_LAB')
-
 from nlp_utils import (
     tokenize_text,
     remove_stopwords,

@@ -12,7 +12,7 @@ NO semantic reasoning, embeddings, ML models, or AI judgment.
 """
 
 import re
-from typing import List, Set, Tuple, Dict
+from typing import List, Set, Tuple, Dict, Any
 from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
@@ -56,7 +56,8 @@ EXCLUDED_PHRASES = {
         'cost effective',
     ],
     'pain': [  # painful stem
-        'pain point',  # This is actually valid, so we DON'T exclude it
+        # Note: "pain point" is actually valid for complaints, so we don't exclude it
+        # We only exclude painting-related terms
         'painting',
     ],
     'problem': [
@@ -213,7 +214,7 @@ def check_required_context(keyword_stem: str, text: str, tokens: List[str]) -> b
     return False
 
 
-def preprocess_text(text: str) -> Dict[str, any]:
+def preprocess_text(text: str) -> Dict[str, Any]:
     """
     Complete deterministic NLP preprocessing pipeline.
     
@@ -275,7 +276,7 @@ def preprocess_text(text: str) -> Dict[str, any]:
     }
 
 
-def match_keyword_with_context(keyword: str, preprocessed: Dict[str, any]) -> bool:
+def match_keyword_with_context(keyword: str, preprocessed: Dict[str, Any]) -> bool:
     """
     Check if keyword matches in preprocessed text with proper context validation.
     
@@ -311,7 +312,7 @@ def match_keyword_with_context(keyword: str, preprocessed: Dict[str, any]) -> bo
     return True
 
 
-def match_keywords_with_deduplication(keywords: List[str], preprocessed: Dict[str, any]) -> bool:
+def match_keywords_with_deduplication(keywords: List[str], preprocessed: Dict[str, Any]) -> bool:
     """
     Check if ANY keyword from list matches in preprocessed text.
     Returns True on first match (for efficiency).
