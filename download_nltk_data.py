@@ -19,4 +19,5 @@ print("Downloading NLTK data...")
 nltk.download('punkt', quiet=False)
 nltk.download('stopwords', quiet=False)
 nltk.download('punkt_tab', quiet=False)
+nltk.download('wordnet', quiet=False)  # For lemmatization
 print("NLTK data download complete!")

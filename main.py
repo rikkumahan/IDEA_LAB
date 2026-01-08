@@ -1,9 +1,14 @@
 import os
 import requests
+import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from nlp_utils import preprocess_text, match_keywords_with_deduplication
+from nlp_utils import preprocess_text, match_keywords_with_deduplication, normalize_problem_text
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -43,31 +48,182 @@ def analyze_idea(data: IdeaInput):
 
 
 def generate_search_queries(problem: str):
-    complaint_queries = [
-        f"{problem} every day",
-        f"{problem} wasting time",
-        f"frustrating {problem}",
-        f"manual {problem}"
+    """
+    Generate search queries with deterministic normalization and strict MIN-MAX bounds.
+    
+    DESIGN PRINCIPLES:
+    1. Normalize problem text BEFORE query generation (lowercase, lemmatize, remove stopwords)
+    2. Use ONLY fixed query templates per bucket (no overlap between buckets)
+    3. Enforce STRICT MIN-MAX bounds per bucket
+    4. Deduplicate queries AFTER normalization and BEFORE execution
+    5. NO LLM-based rewriting, synonym expansion, or semantic reasoning
+    
+    BUCKET BOUNDS (STRICT):
+    - complaint_queries: MIN=3, MAX=4
+    - workaround_queries: MIN=3, MAX=4
+    - tool_queries: MIN=2, MAX=3
+    - blog_queries: MIN=2, MAX=3
+    
+    Each bucket serves ONE purpose only. Templates must never overlap in intent.
+    """
+    
+    # STEP 1: Normalize problem text using deterministic NLP
+    # This reduces the problem to core noun/verb phrase for consistent queries
+    normalized_problem = normalize_problem_text(problem)
+    
+    logger.info(f"Original problem: '{problem}'")
+    logger.info(f"Normalized problem: '{normalized_problem}'")
+    
+    # STEP 2: Generate queries using FIXED templates per bucket
+    # Each template is designed for ONE specific bucket purpose
+    
+    # COMPLAINT QUERIES: Human pain, frustration, time waste
+    # Purpose: Detect people actively complaining about the problem
+    # Templates focus on negative emotions and inefficiency
+    complaint_templates = [
+        f"{normalized_problem} every day",           # Frequency indicator
+        f"{normalized_problem} wasting time",        # Time waste indicator
+        f"frustrating {normalized_problem}",         # Emotional frustration
+        f"manual {normalized_problem}",              # Tedious manual work
     ]
-
-    workaround_queries = [
-        f"how to automate {problem}",
-        f"{problem} workaround",
-        f"{problem} script",
-        f"{problem} automation"
+    
+    # WORKAROUND QUERIES: DIY solutions, substitutes, hacks
+    # Purpose: Detect people seeking or building their own solutions
+    # Templates focus on solution-seeking behavior
+    workaround_templates = [
+        f"how to automate {normalized_problem}",     # Solution seeking
+        f"{normalized_problem} workaround",          # Explicit workaround
+        f"{normalized_problem} script",              # DIY scripting
+        f"{normalized_problem} automation",          # Automation seeking
     ]
-
-    tool_queries = [
-        f"{problem} tool",
-        f"{problem} software",
-        f"{problem} chrome extension"
+    
+    # TOOL QUERIES: Existing commercial solutions, competitors
+    # Purpose: Detect existing products/tools that solve this problem
+    # Templates focus on product discovery
+    tool_templates = [
+        f"{normalized_problem} tool",                # Generic tool search
+        f"{normalized_problem} software",            # Software product
+        f"{normalized_problem} chrome extension",    # Browser tool
     ]
-
+    
+    # BLOG QUERIES: Content saturation, thought leadership
+    # Purpose: Detect if people are writing about this problem
+    # Templates focus on content/discussion discovery
+    blog_templates = [
+        f"{normalized_problem} blog",                # Blog posts
+        f"{normalized_problem} guide",               # How-to guides
+        f"{normalized_problem} best practices",      # Educational content
+    ]
+    
+    # STEP 3: Enforce MIN-MAX bounds per bucket
+    # If templates < MIN: Log warning (DO NOT invent new queries)
+    # If templates > MAX: Trim to MAX (deterministic - keep first N)
+    
+    complaint_queries = enforce_bounds(
+        complaint_templates, 
+        min_count=3, 
+        max_count=4, 
+        bucket_name="complaint_queries"
+    )
+    
+    workaround_queries = enforce_bounds(
+        workaround_templates, 
+        min_count=3, 
+        max_count=4, 
+        bucket_name="workaround_queries"
+    )
+    
+    tool_queries = enforce_bounds(
+        tool_templates, 
+        min_count=2, 
+        max_count=3, 
+        bucket_name="tool_queries"
+    )
+    
+    blog_queries = enforce_bounds(
+        blog_templates, 
+        min_count=2, 
+        max_count=3, 
+        bucket_name="blog_queries"
+    )
+    
+    # STEP 4: Deduplicate queries AFTER normalization
+    # This ensures we don't run the same query multiple times
+    all_queries = (
+        complaint_queries + 
+        workaround_queries + 
+        tool_queries + 
+        blog_queries
+    )
+    deduplicated = deduplicate_queries(all_queries)
+    
+    # Split back into buckets (maintain original bucket assignments)
+    # Deduplication only removes exact duplicates, preserving bucket structure
+    complaint_queries = deduplicate_queries(complaint_queries)
+    workaround_queries = deduplicate_queries(workaround_queries)
+    tool_queries = deduplicate_queries(tool_queries)
+    blog_queries = deduplicate_queries(blog_queries)
+    
     return {
         "complaint_queries": complaint_queries,
         "workaround_queries": workaround_queries,
-        "tool_queries": tool_queries
+        "tool_queries": tool_queries,
+        "blog_queries": blog_queries,
     }
+
+
+def enforce_bounds(queries, min_count, max_count, bucket_name):
+    """
+    Enforce strict MIN-MAX bounds on query count per bucket.
+    
+    If queries < MIN: Log warning (DO NOT create new queries)
+    If queries > MAX: Trim to MAX (deterministic - keep first N)
+    
+    This is DETERMINISTIC - no randomness, no intelligence.
+    """
+    query_count = len(queries)
+    
+    # Check minimum bound
+    if query_count < min_count:
+        logger.warning(
+            f"[{bucket_name}] Template count ({query_count}) is below MIN ({min_count}). "
+            f"Cannot generate sufficient queries. Consider adding more templates."
+        )
+        # Return what we have - DO NOT invent new queries
+        return queries
+    
+    # Enforce maximum bound (trim excess deterministically)
+    if query_count > max_count:
+        logger.info(
+            f"[{bucket_name}] Trimming queries from {query_count} to MAX ({max_count})"
+        )
+        return queries[:max_count]  # Keep first N queries (deterministic)
+    
+    # Within bounds - return as is
+    return queries
+
+
+def deduplicate_queries(queries):
+    """
+    Deduplicate queries while preserving order.
+    
+    This is DETERMINISTIC - maintains the order of first occurrence.
+    Uses case-insensitive comparison after whitespace normalization.
+    """
+    seen = set()
+    deduplicated = []
+    
+    for query in queries:
+        # Normalize for comparison (lowercase, strip, collapse whitespace)
+        normalized = ' '.join(query.lower().split())
+        
+        if normalized not in seen:
+            seen.add(normalized)
+            deduplicated.append(query)
+        else:
+            logger.debug(f"Removing duplicate query: '{query}'")
+    
+    return deduplicated
 
 def serpapi_search(query: str):
     api_key = os.getenv("SERPAPI_KEY")
