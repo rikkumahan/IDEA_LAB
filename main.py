@@ -1021,8 +1021,11 @@ SOLUTION_CLASS_SIGNALS = {
     'service', 'product', 'application', 'app',
 }.union(COMPARISON_SIGNALS).union(MARKET_MATURITY_SIGNALS)
 
+# Category name extraction patterns
+# Purpose: Used to extract potential category names from text (e.g., "CRM software")
+# Overlap with SOLUTION_CLASS_SIGNALS is intentional - these patterns help identify
+# specific category phrases like "project management software" or "CRM platform"
 CATEGORY_NAME_PATTERNS = {
-    # Common SaaS category patterns
     'software', 'platform', 'tools', 'solution', 'system',
     'service', 'app', 'suite', 'management'
 }
@@ -1043,6 +1046,9 @@ SOLUTION_CLASS_THRESHOLDS = {
     # Solution language thresholds for different confidence levels
     'solution_medium': 0.5,             # 50% solution language = MEDIUM confidence
     'solution_low': 0.4,                # 40% solution language = LOW confidence
+    
+    # Output limits
+    'category_indicators_limit': 10,    # Max unique category indicators to return
 }
 
 
@@ -1161,8 +1167,9 @@ def detect_solution_class_existence(tool_results):
         confidence = 'NONE'
         evidence.append("No strong category signals detected - may be novel/emerging problem space")
     
-    # Deduplicate category indicators
-    unique_categories = list(set(category_indicators[:10]))  # Top 10 unique
+    # Deduplicate category indicators (limit to configured max)
+    limit = SOLUTION_CLASS_THRESHOLDS['category_indicators_limit']
+    unique_categories = list(set(category_indicators[:limit]))
     
     logger.info(
         f"Solution-class existence: {exists} (confidence: {confidence}) - "
