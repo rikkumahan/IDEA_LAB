@@ -80,11 +80,13 @@ def generate_search_queries(problem: str):
     # COMPLAINT QUERIES: Human pain, frustration, time waste
     # Purpose: Detect people actively complaining about the problem
     # Templates focus on negative emotions and inefficiency
+    # ISSUE 2 FIX: Each query must introduce a DISTINCT modifier
+    # Removed: "every day" (filler phrase from ISSUE 4)
+    # Removed: "manual" prefix (often redundant with normalized problem)
     complaint_templates = [
-        f"{normalized_problem} every day",           # Frequency indicator
         f"{normalized_problem} wasting time",        # Time waste indicator
         f"frustrating {normalized_problem}",         # Emotional frustration
-        f"manual {normalized_problem}",              # Tedious manual work
+        f"{normalized_problem} problem",             # Direct problem statement
     ]
     
     # WORKAROUND QUERIES: DIY solutions, substitutes, hacks
@@ -149,20 +151,17 @@ def generate_search_queries(problem: str):
     
     # STEP 4: Deduplicate queries AFTER normalization
     # This ensures we don't run the same query multiple times
-    all_queries = (
-        complaint_queries + 
-        workaround_queries + 
-        tool_queries + 
-        blog_queries
-    )
-    deduplicated = deduplicate_queries(all_queries)
-    
-    # Split back into buckets (maintain original bucket assignments)
-    # Deduplication only removes exact duplicates, preserving bucket structure
     complaint_queries = deduplicate_queries(complaint_queries)
     workaround_queries = deduplicate_queries(workaround_queries)
     tool_queries = deduplicate_queries(tool_queries)
     blog_queries = deduplicate_queries(blog_queries)
+    
+    # STEP 5: ISSUE 2 FIX - Ensure intra-bucket query diversity
+    # Remove near-duplicates that differ only by emotional padding
+    complaint_queries = ensure_query_diversity(complaint_queries, "complaint_queries")
+    workaround_queries = ensure_query_diversity(workaround_queries, "workaround_queries")
+    tool_queries = ensure_query_diversity(tool_queries, "tool_queries")
+    blog_queries = ensure_query_diversity(blog_queries, "blog_queries")
     
     return {
         "complaint_queries": complaint_queries,
@@ -224,6 +223,62 @@ def deduplicate_queries(queries):
             logger.debug(f"Removing duplicate query: '{query}'")
     
     return deduplicated
+
+
+def ensure_query_diversity(queries, bucket_name):
+    """
+    Ensure intra-bucket query diversity by removing near-duplicates.
+    
+    ISSUE 2 FIX: Within each query bucket, ensure each query introduces a DISTINCT modifier.
+    Prune queries that differ only by emotional intensifiers or filler phrases.
+    Keep at most ONE emotional modifier per query.
+    
+    This is DETERMINISTIC - uses rule-based core extraction and comparison.
+    
+    Args:
+        queries: List of queries in a bucket
+        bucket_name: Name of the bucket (for logging)
+        
+    Returns:
+        List of queries with near-duplicates removed
+    """
+    if len(queries) <= 1:
+        return queries
+    
+    # Emotional modifiers that should not create multiple near-duplicate queries
+    emotional_modifiers = {'frustrating', 'annoying', 'tedious', 'painful'}
+    
+    # Extract core content (remove emotional modifiers only) for comparison
+    def extract_core(query):
+        """Extract core content by removing ONLY emotional modifiers"""
+        words = query.lower().split()
+        # Remove emotional modifiers
+        core_words = [w for w in words if w not in emotional_modifiers]
+        return ' '.join(core_words)
+    
+    # Track unique cores and keep only first occurrence of each core
+    seen_cores = {}
+    diverse_queries = []
+    
+    for query in queries:
+        core = extract_core(query)
+        
+        if core not in seen_cores:
+            seen_cores[core] = query
+            diverse_queries.append(query)
+        else:
+            # This is a near-duplicate (differs only by emotional modifier)
+            logger.debug(
+                f"[{bucket_name}] Removing near-duplicate query: '{query}' "
+                f"(similar to '{seen_cores[core]}')"
+            )
+    
+    # ASSERTION: Each query should have distinct content
+    cores = [extract_core(q) for q in diverse_queries]
+    assert len(cores) == len(set(cores)), \
+        f"[{bucket_name}] Query diversity check failed - near-duplicates remain"
+    
+    return diverse_queries
 
 def serpapi_search(query: str):
     api_key = os.getenv("SERPAPI_KEY")
@@ -448,17 +503,50 @@ def normalize_signals(signals):
     }
 
 def classify_problem_level(signals):
+    """
+    Classify problem level based on weighted signal scoring with guardrails.
+    
+    ISSUE 3 FIX: Added guardrail to prevent false DRASTIC classification.
+    - If intensity_level != "HIGH", problem_level MUST NOT be "DRASTIC"
+    - In this case, downgrade to "SEVERE"
+    
+    This is a rule-based guardrail, NOT a weight change.
+    
+    Args:
+        signals: Dictionary with intensity_count, complaint_count, workaround_count
+        
+    Returns:
+        Problem level string: "DRASTIC", "SEVERE", "MODERATE", or "LOW"
+    """
     score = (
         3 * signals["intensity_count"] +
         2 * signals["complaint_count"] +
         1 * signals["workaround_count"]
     )
-
+    
+    # Compute intensity level for guardrail check
+    intensity_level = normalize_level(signals["intensity_count"])
+    
+    # Initial classification based on score
     if score >= 15:
-        return "DRASTIC"
+        problem_level = "DRASTIC"
     elif score >= 8:
-        return "SEVERE"
+        problem_level = "SEVERE"
     elif score >= 4:
-        return "MODERATE"
+        problem_level = "MODERATE"
     else:
-        return "LOW"
+        problem_level = "LOW"
+    
+    # ISSUE 3 FIX: Guardrail - DRASTIC only possible when intensity_level == HIGH
+    if problem_level == "DRASTIC" and intensity_level != "HIGH":
+        logger.info(
+            f"Applying DRASTIC guardrail: intensity_level={intensity_level} (not HIGH), "
+            f"downgrading from DRASTIC to SEVERE"
+        )
+        problem_level = "SEVERE"
+    
+    # ASSERTION: DRASTIC is only possible when intensity_level == HIGH
+    assert problem_level != "DRASTIC" or intensity_level == "HIGH", \
+        f"DRASTIC problem level requires HIGH intensity_level, got {intensity_level}"
+    
+    return problem_level

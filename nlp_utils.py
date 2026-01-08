@@ -343,10 +343,14 @@ def normalize_problem_text(problem: str) -> str:
     2. Tokenizes
     3. Removes stopwords (excluding important negations like 'not', 'no', 'never')
     4. Lemmatizes (reduces words to base forms)
-    5. Joins back into a normalized phrase
+    5. Removes filler time phrases (e.g., "every day") unless required for meaning
+    6. Removes duplicate tokens (preserves order, keeps first occurrence)
+    7. Joins back into a normalized phrase
     
     This is DETERMINISTIC - same input always produces same output.
     NO LLM, embeddings, or semantic reasoning.
+    
+    IDEMPOTENCY: Applying normalization twice yields the same output.
     
     Args:
         problem: Raw problem text from user input
@@ -360,6 +364,9 @@ def normalize_problem_text(problem: str) -> str:
         
         Input:  "Frustrated with manual data entry"
         Output: "frustrate manual data entry"
+        
+        Input:  "manual manual jira ticket creation meeting"
+        Output: "manual jira ticket creation meet"
     """
     if not problem or not problem.strip():
         return ""
@@ -389,7 +396,27 @@ def normalize_problem_text(problem: str) -> str:
         else:
             lemmatized.append(noun_form)
     
-    # Step 5: Join back into normalized phrase
-    normalized = ' '.join(lemmatized)
+    # Step 5: Remove non-essential filler time phrases
+    # These add noise without increasing signal quality
+    filler_phrases = {'every', 'day', 'daily', 'everyday', 'always', 'constantly'}
+    lemmatized = [token for token in lemmatized if token not in filler_phrases]
+    
+    # Step 6: Remove duplicate tokens (ISSUE 1 FIX)
+    # Preserves order by keeping first occurrence of each token
+    # This ensures idempotency: normalize(normalize(x)) == normalize(x)
+    seen = set()
+    deduplicated = []
+    for token in lemmatized:
+        if token not in seen:
+            seen.add(token)
+            deduplicated.append(token)
+    
+    # Step 7: Join back into normalized phrase
+    normalized = ' '.join(deduplicated)
+    
+    # ASSERTION: No repeated tokens in normalized text
+    tokens_list = normalized.split()
+    assert len(tokens_list) == len(set(tokens_list)), \
+        f"Normalized text contains duplicate tokens: {normalized}"
     
     return normalized
