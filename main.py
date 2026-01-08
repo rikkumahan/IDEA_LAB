@@ -752,3 +752,391 @@ def classify_problem_level(signals):
         f"SEVERE problem level requires intensity_count >= 1, got {intensity_count}"
     
     return problem_level
+
+
+# ============================================================================
+# COMPETITION AND CONTENT SATURATION ANALYSIS
+# ============================================================================
+
+# Commercial vs DIY classification keywords
+COMMERCIAL_KEYWORDS = {
+    'pricing', 'subscription', 'enterprise', 'saas', 'platform',
+    'buy', 'purchase', 'license', 'trial', 'demo', 'signup',
+    'company', 'inc', 'corp', 'llc', 'business', 'plan', 'plans'
+}
+
+DIY_KEYWORDS = {
+    'how to', 'diy', 'custom', 'manual', 'open source',
+    'github', 'python script', 'bash script', 'shell script', 'javascript code',
+    'code snippet', 'build your own', 'create your own',
+    'homebrew', 'self-hosted', 'tutorial', 'free and open',
+    'completely free', 'totally free', 'free forever', 'diy solution'
+}
+
+def classify_result_type(result):
+    """
+    Classify search result as commercial or DIY based on keywords.
+    
+    This is deterministic keyword matching (no ML/AI).
+    
+    Args:
+        result: Search result dict with 'title' and 'snippet'
+        
+    Returns:
+        'commercial', 'diy', or 'unknown'
+    """
+    text = (
+        (result.get("title") or "") + " " +
+        (result.get("snippet") or "")
+    ).lower()
+    
+    has_commercial = any(kw in text for kw in COMMERCIAL_KEYWORDS)
+    has_diy = any(kw in text for kw in DIY_KEYWORDS)
+    
+    if has_commercial and not has_diy:
+        return 'commercial'
+    elif has_diy and not has_commercial:
+        return 'diy'
+    else:
+        return 'unknown'  # Mixed or unclear
+
+
+def separate_tool_workaround_results(tool_results, workaround_results):
+    """
+    Re-classify tool and workaround results to ensure bucket purity.
+    
+    Move DIY results from tool_results to workaround_results.
+    Move commercial results from workaround_results to tool_results.
+    
+    This fixes ISSUE 1: Query bucket mixing.
+    
+    Args:
+        tool_results: Results from tool_queries
+        workaround_results: Results from workaround_queries
+        
+    Returns:
+        Tuple of (corrected_tool_results, corrected_workaround_results)
+    """
+    corrected_tool = []
+    corrected_workaround = []
+    
+    # Re-classify tool results
+    for result in tool_results:
+        result_type = classify_result_type(result)
+        if result_type == 'commercial':
+            corrected_tool.append(result)
+        elif result_type == 'diy':
+            corrected_workaround.append(result)
+        else:
+            # Unknown - keep in original bucket with warning
+            corrected_tool.append(result)
+            logger.debug(f"Ambiguous tool result: {result.get('url')}")
+    
+    # Re-classify workaround results
+    for result in workaround_results:
+        result_type = classify_result_type(result)
+        if result_type == 'diy':
+            corrected_workaround.append(result)
+        elif result_type == 'commercial':
+            corrected_tool.append(result)
+        else:
+            # Unknown - keep in original bucket
+            corrected_workaround.append(result)
+    
+    # Deduplicate after reclassification
+    corrected_tool = deduplicate_results(corrected_tool)
+    corrected_workaround = deduplicate_results(corrected_workaround)
+    
+    return corrected_tool, corrected_workaround
+
+
+def compute_competition_pressure(competitor_count, competition_type='commercial'):
+    """
+    Compute competition pressure level based on competitor count.
+    
+    This implements ISSUE 4: Deterministic competition pressure rules.
+    
+    Thresholds:
+    - Commercial: LOW (0-3), MEDIUM (4-9), HIGH (10+)
+    - DIY: LOW (0-6), MEDIUM (7-19), HIGH (20+) [2x tolerance]
+    
+    Args:
+        competitor_count: Number of competitors found
+        competition_type: 'commercial' or 'diy'
+        
+    Returns:
+        "LOW", "MEDIUM", or "HIGH"
+    """
+    # Adjust thresholds based on competition type
+    if competition_type == 'diy':
+        # DIY workarounds are less threatening than commercial competitors
+        # Double the thresholds (more tolerance for workarounds)
+        low_threshold = 6
+        high_threshold = 20
+    else:  # commercial
+        # Standard thresholds for commercial competitors
+        low_threshold = 3
+        high_threshold = 10
+    
+    # Apply thresholds
+    if competitor_count <= low_threshold:
+        pressure = "LOW"
+    elif competitor_count < high_threshold:
+        pressure = "MEDIUM"
+    else:
+        pressure = "HIGH"
+    
+    logger.info(
+        f"Competition pressure: {pressure} "
+        f"({competitor_count} {competition_type} competitors)"
+    )
+    
+    return pressure
+
+
+# Content saturation classification keywords
+CLICKBAIT_SIGNALS = {
+    # Clickbait patterns
+    'top 10', 'best of', 'you won\'t believe', 'shocking',
+    'ultimate guide', 'secret', 'hack', 'trick',
+    'one simple', 'this will change', 'must read',
+    # Low-value patterns
+    'listicle', 'roundup', 'collection', 'compilation'
+}
+
+TREND_SIGNALS = {
+    # Year-specific (transient)
+    '2024', '2025', '2026',
+    # Event-specific
+    'pandemic', 'covid', 'lockdown', 'new normal',
+    # Trend/fad indicators
+    'trending', 'hot topic', 'latest', 'brand new',
+    'just released', 'this week', 'this month'
+}
+
+TECHNICAL_SIGNALS = {
+    # Technical depth
+    'how to', 'tutorial', 'guide', 'documentation',
+    'implementation', 'architecture', 'algorithm',
+    'step by step', 'walkthrough', 'example',
+    # Problem-solving
+    'solution', 'fix', 'debugging', 'troubleshooting',
+    'optimize', 'improve', 'automate'
+}
+
+
+def classify_saturation_signal(content_count, blog_results):
+    """
+    Classify whether high content count is NEGATIVE or NEUTRAL.
+    
+    This implements ISSUE 3: Content saturation interpretation rules.
+    
+    Rules (deterministic, no ML):
+    1. If content_count < 6: NEUTRAL (low saturation)
+    2. If >40% clickbait content: NEGATIVE (low-quality)
+    3. If >50% trend/year content: NEGATIVE (transient fad)
+    4. If >50% technical content: NEUTRAL (evergreen)
+    5. Otherwise: NEUTRAL (benefit of doubt)
+    
+    Args:
+        content_count: Number of blog/guide results
+        blog_results: List of search results from blog_queries
+        
+    Returns:
+        "NEGATIVE" or "NEUTRAL"
+    """
+    # Rule 1: Low count is always neutral
+    if content_count < 6:
+        return "NEUTRAL"
+    
+    # Count signal occurrences
+    clickbait_count = 0
+    trend_count = 0
+    technical_count = 0
+    
+    for result in blog_results:
+        text = (
+            (result.get('title') or '') + ' ' + 
+            (result.get('snippet') or '')
+        ).lower()
+        
+        if any(signal in text for signal in CLICKBAIT_SIGNALS):
+            clickbait_count += 1
+        
+        if any(signal in text for signal in TREND_SIGNALS):
+            trend_count += 1
+        
+        if any(signal in text for signal in TECHNICAL_SIGNALS):
+            technical_count += 1
+    
+    # Compute ratios
+    clickbait_ratio = clickbait_count / content_count
+    trend_ratio = trend_count / content_count
+    technical_ratio = technical_count / content_count
+    
+    # Rule 2: High clickbait ratio → NEGATIVE
+    if clickbait_ratio > 0.4:
+        logger.info(
+            f"Content saturation is NEGATIVE: {clickbait_ratio:.1%} clickbait "
+            f"({clickbait_count}/{content_count} results)"
+        )
+        return "NEGATIVE"
+    
+    # Rule 3: High trend ratio → NEGATIVE
+    if trend_ratio > 0.5:
+        logger.info(
+            f"Content saturation is NEGATIVE: {trend_ratio:.1%} trend content "
+            f"({trend_count}/{content_count} results)"
+        )
+        return "NEGATIVE"
+    
+    # Rule 4: High technical ratio → NEUTRAL
+    if technical_ratio > 0.5:
+        logger.info(
+            f"Content saturation is NEUTRAL: {technical_ratio:.1%} technical "
+            f"({technical_count}/{content_count} results)"
+        )
+        return "NEUTRAL"
+    
+    # Rule 5: Default to NEUTRAL
+    logger.info("Content saturation is NEUTRAL: Mixed quality, defaulting to neutral")
+    return "NEUTRAL"
+
+
+def analyze_competition(problem: str):
+    """
+    Analyze competition pressure for a problem.
+    
+    This implements ISSUE 2: Competition pressure computation.
+    
+    Returns:
+        Dict with commercial and DIY competition metrics
+    """
+    queries = generate_search_queries(problem)
+    
+    # Run tool queries to find competitors
+    tool_results = run_multiple_searches(queries["tool_queries"])
+    tool_results = deduplicate_results(tool_results)
+    
+    # Run workaround queries to find DIY alternatives
+    workaround_results = run_multiple_searches(queries["workaround_queries"])
+    workaround_results = deduplicate_results(workaround_results)
+    
+    # Separate commercial vs DIY (fixes ISSUE 1: bucket mixing)
+    tool_results, workaround_results = separate_tool_workaround_results(
+        tool_results, workaround_results
+    )
+    
+    commercial_count = len(tool_results)
+    diy_count = len(workaround_results)
+    
+    # Compute pressure levels (ISSUE 4: deterministic thresholds)
+    commercial_pressure = compute_competition_pressure(
+        commercial_count, 
+        competition_type='commercial'
+    )
+    diy_pressure = compute_competition_pressure(
+        diy_count, 
+        competition_type='diy'
+    )
+    
+    # Overall pressure: worst of commercial or DIY
+    if commercial_pressure == "HIGH" or diy_pressure == "HIGH":
+        overall_pressure = "HIGH"
+    elif commercial_pressure == "MEDIUM" or diy_pressure == "MEDIUM":
+        overall_pressure = "MEDIUM"
+    else:
+        overall_pressure = "LOW"
+    
+    return {
+        "commercial_competitors": {
+            "count": commercial_count,
+            "pressure": commercial_pressure,
+            "top_5": [
+                {'title': r.get('title'), 'url': r.get('url')}
+                for r in tool_results[:5]
+            ]
+        },
+        "diy_alternatives": {
+            "count": diy_count,
+            "pressure": diy_pressure,
+            "top_5": [
+                {'title': r.get('title'), 'url': r.get('url')}
+                for r in workaround_results[:5]
+            ]
+        },
+        "overall_pressure": overall_pressure,
+        "queries_used": {
+            "tool_queries": queries["tool_queries"],
+            "workaround_queries": queries["workaround_queries"]
+        }
+    }
+
+
+def analyze_content_saturation(problem: str):
+    """
+    Analyze content saturation for a problem.
+    
+    This implements ISSUE 2: Content saturation computation.
+    
+    Returns:
+        Dict with content saturation metrics
+    """
+    queries = generate_search_queries(problem)
+    
+    # Run blog queries to find educational content
+    blog_results = run_multiple_searches(queries["blog_queries"])
+    blog_results = deduplicate_results(blog_results)
+    
+    content_count = len(blog_results)
+    
+    # Deterministic thresholds for saturation level
+    if content_count >= 15:
+        saturation_level = "HIGH"
+    elif content_count >= 6:
+        saturation_level = "MEDIUM"
+    else:
+        saturation_level = "LOW"
+    
+    # Classify as NEGATIVE or NEUTRAL (ISSUE 3: interpretation rules)
+    saturation_signal = classify_saturation_signal(content_count, blog_results)
+    
+    return {
+        "content_count": content_count,
+        "saturation_level": saturation_level,
+        "saturation_signal": saturation_signal,
+        "queries_used": queries["blog_queries"],
+        "top_5": [
+            {'title': r.get('title'), 'url': r.get('url')}
+            for r in blog_results[:5]
+        ]
+    }
+
+
+@app.post("/analyze-market")
+def analyze_market(data: IdeaInput):
+    """
+    Comprehensive market analysis combining problem severity, competition, and content.
+    
+    This is the new endpoint that uses ALL query buckets:
+    - complaint_queries → problem severity
+    - tool_queries + workaround_queries → competition pressure
+    - blog_queries → content saturation
+    
+    Returns:
+        Dict with problem, competition, and content_saturation analyses
+    """
+    # Problem severity analysis (existing)
+    problem_analysis = analyze_idea(data)
+    
+    # Competition analysis (new - ISSUE 2)
+    competition_analysis = analyze_competition(data.problem)
+    
+    # Content saturation analysis (new - ISSUE 2)
+    content_analysis = analyze_content_saturation(data.problem)
+    
+    return {
+        "problem": problem_analysis,
+        "competition": competition_analysis,
+        "content_saturation": content_analysis
+    }
