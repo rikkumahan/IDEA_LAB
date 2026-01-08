@@ -89,14 +89,19 @@ def test_classify_result_type_unknown():
         'title': 'Data Processing Best Practices',
         'snippet': 'Common approaches to handling large datasets.'
     }
+    # Should be unknown since no strong signals are present
     assert classify_result_type(result1) == 'unknown'
     
     # Test case 2: Mixed signals (both commercial and DIY)
+    # UPDATED: Per problem statement, precedence is commercial > diy > content > unknown
+    # So mixed commercial + DIY signals should return 'commercial', not 'unknown'
     result2 = {
         'title': 'Open Source SaaS Platform - Free Trial',
         'snippet': 'DIY customization available. Pricing for enterprise.'
     }
-    assert classify_result_type(result2) == 'unknown'
+    # Commercial wins in mixed signal cases (precedence rule)
+    assert classify_result_type(result2) == 'commercial', \
+        "Mixed commercial + DIY signals should return 'commercial' per precedence rule"
     
     print("✓ Unknown result classification tests passed")
 
