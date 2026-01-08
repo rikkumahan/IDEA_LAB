@@ -3,6 +3,7 @@ import requests
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from nlp_utils import preprocess_text, match_keywords_with_deduplication
 
 load_dotenv()
 
@@ -100,57 +101,155 @@ def serpapi_search(query: str):
 
     return results
 
+# Improved keyword lists with better coverage
+# These will be stemmed during matching to catch variants
+
 WORKAROUND_KEYWORDS = [
+    # Direct action keywords
     "how to",
     "workaround",
+    "work around",
     "automation",
+    "automate",
+    "automated",
     "script",
-    "tool"
+    "scripted",
+    "scripting",
+    "tool",
+    "tools",
+    # Solution-seeking patterns
+    "solution",
+    "solve",
+    "fix",
+    "hack",
+    "trick",
+    "bypass",
 ]
+
 COMPLAINT_KEYWORDS = [
+    # Direct problem statements
     "problem",
+    "problems",
+    "issue",
+    "issues",
     "frustrating",
+    "frustrated",
+    "frustration",
+    # Time/effort waste indicators
     "wasting time",
+    "waste time",
+    "time consuming",
+    "time-consuming",
+    "tedious",
     "manual",
-    "issue"
+    "manually",
+    "repetitive",
+    "repeatedly",
+    # Difficulty indicators
+    "difficult",
+    "hard",
+    "challenging",
+    "struggle",
+    "struggling",
+    "annoying",
+    "annoyed",
 ]
+
 INTENSITY_KEYWORDS = [
+    # Urgency indicators
     "urgent",
+    "urgently",
+    # Severity indicators
     "critical",
-    "blocking",
+    "critically",
     "severe",
+    "severely",
     "serious",
+    "seriously",
+    # Impact indicators
+    "blocking",
+    "blocked",
+    "blocker",
+    # Cost/waste indicators
     "wasting",
+    "waste",
     "costing",
+    # Usability indicators
     "unusable",
     "painful",
-    "nightmare"
+    "nightmare",
+    "terrible",
+    "awful",
+    "horrible",
+    # Business impact
+    "losing",
+    "loss",
 ]
 
 def extract_signals(search_results):
+    """
+    Extract signals from search results using deterministic NLP preprocessing.
+    
+    Key improvements:
+    1. Uses stemming to catch morphological variants
+    2. Token-based matching to prevent false positives
+    3. Context-aware phrase detection
+    4. ONE document contributes to AT MOST ONE signal category
+    
+    Priority order: intensity > complaint > workaround
+    This ensures statistical independence of signals.
+    """
     workaround_count = 0
     complaint_count = 0
     intensity_count = 0
+    
+    # Track which URLs contributed to which signal (for debugging/validation)
+    signal_tracking = {
+        'intensity': [],
+        'complaint': [],
+        'workaround': []
+    }
 
     for result in search_results:
+        # Combine title and snippet
         text = (
             (result.get("title") or "") + " " +
             (result.get("snippet") or "")
-        ).lower()
-
-        if any(k in text for k in WORKAROUND_KEYWORDS):
-            workaround_count += 1
-
-        if any(k in text for k in COMPLAINT_KEYWORDS):
-            complaint_count += 1
-
-        if any(k in text for k in INTENSITY_KEYWORDS):
+        )
+        
+        # Skip empty results
+        if not text.strip():
+            continue
+        
+        # Preprocess text using deterministic NLP pipeline
+        preprocessed = preprocess_text(text)
+        
+        # Check each signal type in priority order
+        # Each document contributes to AT MOST one signal category
+        
+        # Priority 1: Intensity (most specific)
+        if match_keywords_with_deduplication(INTENSITY_KEYWORDS, preprocessed):
             intensity_count += 1
+            signal_tracking['intensity'].append(result.get("url"))
+            continue  # Don't check other signals for this document
+        
+        # Priority 2: Complaint (medium specificity)
+        if match_keywords_with_deduplication(COMPLAINT_KEYWORDS, preprocessed):
+            complaint_count += 1
+            signal_tracking['complaint'].append(result.get("url"))
+            continue  # Don't check workaround signal
+        
+        # Priority 3: Workaround (least specific, most common)
+        if match_keywords_with_deduplication(WORKAROUND_KEYWORDS, preprocessed):
+            workaround_count += 1
+            signal_tracking['workaround'].append(result.get("url"))
 
     return {
         "workaround_count": workaround_count,
         "complaint_count": complaint_count,
-        "intensity_count": intensity_count
+        "intensity_count": intensity_count,
+        # Include tracking for debugging (optional, can be removed in production)
+        "_signal_tracking": signal_tracking
     }
 
 def run_multiple_searches(queries):
