@@ -1168,8 +1168,9 @@ def detect_solution_class_existence(tool_results):
         evidence.append("No strong category signals detected - may be novel/emerging problem space")
     
     # Deduplicate category indicators (limit to configured max)
+    # Deduplicate first, then limit to ensure we get up to limit unique items
     limit = SOLUTION_CLASS_THRESHOLDS['category_indicators_limit']
-    unique_categories = list(set(category_indicators[:limit]))
+    unique_categories = list(set(category_indicators))[:limit]
     
     logger.info(
         f"Solution-class existence: {exists} (confidence: {confidence}) - "
