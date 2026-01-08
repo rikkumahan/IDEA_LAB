@@ -220,7 +220,7 @@ def test_stage2_excludes_content_sites():
     review_result = {
         'title': 'IdeaValidator Review - G2',
         'snippet': 'Pricing starts at $49/month. Free trial available.',
-        'url': 'https://g2.com/products/ideavalid ator'
+        'url': 'https://g2.com/products/ideavalidator'
     }
     assert classify_result_type(review_result) == 'content', \
         "Review sites should be classified as content"

@@ -203,7 +203,7 @@ Response:
         "products": [
             {
                 "name": "IdeaValidator Pro",
-                "url": "https://ideavalid ator.com",
+                "url": "https://ideavalidator.com",
                 "pricing_model": "freemium",
                 "snippet": "AI-powered startup idea validation..."
             }
