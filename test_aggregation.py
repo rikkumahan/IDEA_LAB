@@ -169,6 +169,10 @@ def test_url_normalization_edge_cases():
     url_special = normalize_url("https://example.com/page?name=John Doe")
     assert "name=John%20Doe" in url_special, f"Expected encoded space, got: {url_special}"
     
+    # Test case 8: Malformed IP-like hostnames (should force HTTPS)
+    assert normalize_url("http://172.abc.1.1/page") == "https://172.abc.1.1/page"
+    assert normalize_url("http://172.invalid/page") == "https://172.invalid/page"
+    
     print("✓ Edge case tests passed")
 
 

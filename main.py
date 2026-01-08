@@ -4,7 +4,7 @@ import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from urllib.parse import urlparse, urlunparse, parse_qs
+from urllib.parse import urlparse, urlunparse, parse_qs, quote
 from nlp_utils import preprocess_text, match_keywords_with_deduplication, normalize_problem_text
 
 # Configure logging
@@ -526,12 +526,22 @@ def normalize_url(url):
                 hostname.startswith('localhost') or 
                 hostname.startswith('127.0.0.1') or
                 hostname.startswith('192.168.') or
-                hostname.startswith('10.') or
-                # 172.16.0.0/12 range (172.16.x.x through 172.31.x.x)
-                (hostname.startswith('172.') and 
-                 len(hostname.split('.')) >= 2 and
-                 16 <= int(hostname.split('.')[1]) <= 31)
+                hostname.startswith('10.')
             )
+            
+            # Check for 172.16.0.0/12 range (172.16.x.x through 172.31.x.x)
+            # Safely handle potential parsing errors
+            if not is_local and hostname.startswith('172.'):
+                try:
+                    parts = hostname.split('.')
+                    if len(parts) >= 2:
+                        second_octet = int(parts[1])
+                        if 16 <= second_octet <= 31:
+                            is_local = True
+                except (ValueError, IndexError):
+                    # Not a valid IP, treat as public hostname
+                    pass
+            
             if not is_local:
                 scheme = 'https'
         
@@ -577,7 +587,6 @@ def normalize_url(url):
         
         # Reconstruct query string with proper URL encoding
         if sorted_params:
-            from urllib.parse import quote
             # Take first value if parameter has multiple values, and encode it
             query_parts = []
             for k, v in sorted_params:
