@@ -670,11 +670,13 @@ def classify_problem_level(signals):
     """
     Classify problem level based on weighted signal scoring with guardrails.
     
-    ISSUE 3 FIX: Added guardrail to prevent false DRASTIC classification.
-    - If intensity_level != "HIGH", problem_level MUST NOT be "DRASTIC"
-    - In this case, downgrade to "SEVERE"
+    Guardrails (in order of application):
+    1. Zero-signal check: All counts == 0 → LOW (defensive programming)
+    2. Workaround cap: intensity==0 AND complaints<=1 → cap workaround at 3
+    3. DRASTIC guardrail: intensity_level != HIGH → downgrade to SEVERE
+    4. SEVERE guardrail: intensity_count == 0 → downgrade to MODERATE
     
-    This is a rule-based guardrail, NOT a weight change.
+    All guardrails are deterministic and rule-based, NOT weight changes.
     
     Args:
         signals: Dictionary with intensity_count, complaint_count, workaround_count
@@ -682,14 +684,38 @@ def classify_problem_level(signals):
     Returns:
         Problem level string: "DRASTIC", "SEVERE", "MODERATE", or "LOW"
     """
+    # Input validation: ensure all required keys exist with default 0
+    intensity_count = signals.get("intensity_count", 0)
+    complaint_count = signals.get("complaint_count", 0)
+    workaround_count = signals.get("workaround_count", 0)
+    
+    # GUARDRAIL 1: Zero-signal sanity check (defensive programming)
+    total_signals = intensity_count + complaint_count + workaround_count
+    
+    if total_signals == 0:
+        logger.info("Zero signals detected - returning LOW")
+        return "LOW"
+    
+    # GUARDRAIL 2: Workaround cap when intensity/complaints are minimal
+    # Prevents workaround-only problems from inflating severity
+    effective_workaround = workaround_count
+    if intensity_count == 0 and complaint_count <= 1:
+        effective_workaround = min(workaround_count, 3)
+        if effective_workaround < workaround_count:
+            logger.info(
+                f"Applying workaround cap: intensity=0, complaints={complaint_count}, "
+                f"capping workaround from {workaround_count} to {effective_workaround}"
+            )
+    
+    # Calculate score with capped workaround count
     score = (
-        3 * signals["intensity_count"] +
-        2 * signals["complaint_count"] +
-        1 * signals["workaround_count"]
+        3 * intensity_count +
+        2 * complaint_count +
+        1 * effective_workaround
     )
     
-    # Compute intensity level for guardrail check
-    intensity_level = normalize_level(signals["intensity_count"])
+    # Compute intensity level for guardrail checks
+    intensity_level = normalize_level(intensity_count)
     
     # Initial classification based on score
     if score >= 15:
@@ -701,7 +727,7 @@ def classify_problem_level(signals):
     else:
         problem_level = "LOW"
     
-    # ISSUE 3 FIX: Guardrail - DRASTIC only possible when intensity_level == HIGH
+    # GUARDRAIL 3: DRASTIC only possible when intensity_level == HIGH
     if problem_level == "DRASTIC" and intensity_level != "HIGH":
         logger.info(
             f"Applying DRASTIC guardrail: intensity_level={intensity_level} (not HIGH), "
@@ -709,8 +735,20 @@ def classify_problem_level(signals):
         )
         problem_level = "SEVERE"
     
-    # ASSERTION: DRASTIC is only possible when intensity_level == HIGH
+    # GUARDRAIL 4: SEVERE requires intensity_count >= 1
+    # Prevents false urgency from complaint/workaround volume alone
+    if problem_level == "SEVERE" and intensity_count == 0:
+        logger.info(
+            f"Applying SEVERE guardrail: intensity_count=0, "
+            f"downgrading from SEVERE to MODERATE"
+        )
+        problem_level = "MODERATE"
+    
+    # ASSERTIONS: Verify guardrail invariants
     assert problem_level != "DRASTIC" or intensity_level == "HIGH", \
         f"DRASTIC problem level requires HIGH intensity_level, got {intensity_level}"
+    
+    assert problem_level != "SEVERE" or intensity_count >= 1, \
+        f"SEVERE problem level requires intensity_count >= 1, got {intensity_count}"
     
     return problem_level
