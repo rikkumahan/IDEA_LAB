@@ -24,7 +24,7 @@ the ENTIRE fix is INCOMPLETE.
 """
 
 import sys
-from main import classify_result_type, analyze_competition
+from main import classify_result_type
 
 def test_documentation_invariant():
     """

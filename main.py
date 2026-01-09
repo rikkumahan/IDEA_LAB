@@ -1088,6 +1088,7 @@ def classify_result_type(result):
         'list': ['best tool', 'best software', 'best app', 'best product', 
                  'top tool', 'top software', 'top app', 'top product',
                  'best crm', 'best platform', 'best solution', 'best service',
+                 # Note: "best automation" needed because "best tool" doesn't match "best automation tools"
                  'best automation', 'top automation'],
         'roundup': ['roundup', 'listicle', 'alternatives to', 'list of'],
         
