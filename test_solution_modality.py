@@ -170,11 +170,12 @@ def test_mandatory_bicycle_repair_case():
     print(f"Generated queries: {queries}")
     
     # Step 3: Verify NO software-shaped queries
-    software_terms = ['software', 'tool', 'platform', 'saas', 'automation', 'automated']
+    # Use word boundary checking to avoid false positives (e.g., "repair" contains "ai")
+    software_terms = ['software', 'tool', 'platform', 'saas', 'automation', 'automated', 'ai']
     for query in queries:
         query_lower = query.lower()
-        # Use word boundaries to avoid false positives (e.g., "repair" contains "ai")
-        words = query_lower.split()
+        # Split on both spaces and hyphens to handle compound words
+        words = query_lower.replace('-', ' ').split()
         for term in software_terms:
             if term in words:
                 raise AssertionError(
@@ -232,7 +233,7 @@ def test_service_queries_no_software_terms():
     ]
     
     # Use word boundary matching to avoid false positives
-    software_terms = ['software', 'tool', 'platform', 'saas', 'automation', 'automated']
+    software_terms = ['software', 'tool', 'platform', 'saas', 'automation', 'automated', 'ai']
     
     for solution in service_solutions:
         modality = classify_solution_modality(solution)
@@ -241,7 +242,8 @@ def test_service_queries_no_software_terms():
             
             # Check each query for software terms (as whole words)
             for query in queries:
-                words = query.lower().split()
+                # Split on both spaces and hyphens
+                words = query.lower().replace('-', ' ').split()
                 for term in software_terms:
                     assert term not in words, \
                         f"SERVICE query '{query}' contains software term '{term}'"

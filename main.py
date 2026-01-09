@@ -1623,6 +1623,28 @@ def classify_solution_modality(solution: UserSolution):
     Returns:
         str: "SOFTWARE", "SERVICE", "PHYSICAL_PRODUCT", or "HYBRID"
     """
+    def contains_keyword(text, keywords):
+        """
+        Check if text contains any keyword using word boundary matching.
+        This prevents false positives like 'ai' matching in 'repair'.
+        """
+        text_lower = text.lower()
+        words = text_lower.split()
+        for keyword in keywords:
+            # For multi-word keywords (e.g., "machine learning")
+            if ' ' in keyword:
+                if keyword in text_lower:
+                    return True
+            # For hyphenated keywords (e.g., "ai-powered")
+            elif '-' in keyword:
+                if keyword in text_lower:
+                    return True
+            # For single-word keywords, check exact word match
+            else:
+                if keyword in words:
+                    return True
+        return False
+    
     # Normalize attributes for matching
     automation_level = solution.automation_level.lower().strip()
     core_action = solution.core_action.lower().strip()
@@ -1634,7 +1656,8 @@ def classify_solution_modality(solution: UserSolution):
         'repair', 'maintenance', 'onsite', 'doorstep', 'service',
         'install', 'installation', 'cleaning', 'consulting', 'training',
         'coaching', 'therapy', 'treatment', 'care', 'support',
-        'manual', 'handyman', 'technician', 'specialist'
+        'handyman', 'technician', 'specialist'
+        # Note: 'manual' is in low_automation_keywords, not here
     }
     
     # PHYSICAL_PRODUCT indicators
@@ -1658,12 +1681,12 @@ def classify_solution_modality(solution: UserSolution):
     
     # Check for SERVICE indicators FIRST (highest priority per bias rule)
     # Service actions take precedence over physical outputs
-    has_service_action = any(kw in core_action for kw in service_keywords)
-    has_low_automation = any(kw in automation_level for kw in low_automation_keywords)
+    has_service_action = contains_keyword(core_action, service_keywords)
+    has_low_automation = contains_keyword(automation_level, low_automation_keywords)
     
     if has_service_action:
         # Service action detected - check if also has high automation (HYBRID vs pure SERVICE)
-        has_high_automation = any(kw in automation_level for kw in high_automation_keywords)
+        has_high_automation = contains_keyword(automation_level, high_automation_keywords)
         
         if has_high_automation:
             # HYBRID: Service with automation components
@@ -1682,11 +1705,11 @@ def classify_solution_modality(solution: UserSolution):
     
     # Check for PHYSICAL_PRODUCT indicators (before low automation check)
     # Physical products take precedence over generic low automation
-    has_physical_output = any(kw in output_type for kw in physical_output_keywords)
+    has_physical_output = contains_keyword(output_type, physical_output_keywords)
     
     if has_physical_output:
         # Check if also has software/service components
-        has_high_automation = any(kw in automation_level for kw in high_automation_keywords)
+        has_high_automation = contains_keyword(automation_level, high_automation_keywords)
         
         if has_high_automation:
             # HYBRID: Physical product with software/service
@@ -1713,7 +1736,7 @@ def classify_solution_modality(solution: UserSolution):
         return "SERVICE"
     
     # Check for clear SOFTWARE indicators
-    has_high_automation = any(kw in automation_level for kw in high_automation_keywords)
+    has_high_automation = contains_keyword(automation_level, high_automation_keywords)
     
     if has_high_automation:
         # SOFTWARE: High automation, no service/physical indicators
