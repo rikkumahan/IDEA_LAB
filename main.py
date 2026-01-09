@@ -918,6 +918,173 @@ def is_content_site(url):
     return False
 
 
+# ============================================================================
+# NLP ASSISTANT FUNCTIONS
+# ============================================================================
+# These functions use NLP to SUGGEST features and labels.
+# They are ASSISTANTS, not DECIDERS.
+# 
+# CRITICAL RULES:
+# - NLP suggests candidates or features
+# - Deterministic rules make ALL final decisions
+# - NLP outputs are NEVER written directly to final JSON
+# - If NLP fails, rules must still work (graceful fallback)
+# ============================================================================
+
+def nlp_suggest_page_intent(text: str) -> str:
+    """
+    NLP ASSISTANT: Suggest page intent based on text analysis.
+    
+    This function uses NLP to SUGGEST (not decide) the primary intent of a page.
+    
+    IMPORTANT: This is a SUGGESTION only. The calling function must apply
+    deterministic rules to make the final classification decision.
+    
+    Possible intents:
+    - SELLING: Page is trying to sell a product/service
+    - DOCUMENTATION: Technical docs, API references
+    - GUIDE: How-to guides, tutorials
+    - DISCUSSION: Forums, Q&A, comments
+    - REVIEW: Product reviews, comparisons
+    - UNKNOWN: Cannot determine intent
+    
+    Args:
+        text: Text to analyze (title + snippet)
+        
+    Returns:
+        Intent label (suggestion only, NOT a final decision)
+    """
+    if not text or not text.strip():
+        return "UNKNOWN"
+    
+    # === NLP PREPROCESSING ===
+    # Use existing NLP utilities for consistent preprocessing
+    preprocessed = preprocess_text(text)
+    
+    # === INTENT DETECTION USING NLP-ENHANCED MATCHING ===
+    # These are SUGGESTIONS based on NLP analysis
+    # Rules will validate and make final decisions
+    
+    # SELLING intent keywords
+    selling_keywords = [
+        'pricing', 'subscription', 'sign up', 'free trial',
+        'get started', 'buy now', 'purchase', 'upgrade'
+    ]
+    
+    # DOCUMENTATION intent keywords
+    docs_keywords = [
+        'documentation', 'api reference', 'developer guide',
+        'api docs', 'technical specs'
+    ]
+    
+    # GUIDE intent keywords
+    guide_keywords = [
+        'how to', 'tutorial', 'step by step', 'guide',
+        'getting started', 'learn', 'beginners'
+    ]
+    
+    # DISCUSSION intent keywords
+    discussion_keywords = [
+        'forum', 'thread', 'discussion', 'ask', 'question',
+        'comment', 'reddit', 'stack overflow'
+    ]
+    
+    # REVIEW intent keywords
+    review_keywords = [
+        'review', 'comparison', 'vs', 'versus', 'best',
+        'alternatives', 'pros and cons'
+    ]
+    
+    # Use NLP-enhanced matching for better accuracy
+    has_selling = match_keywords_with_deduplication(selling_keywords, preprocessed)
+    has_docs = match_keywords_with_deduplication(docs_keywords, preprocessed)
+    has_guide = match_keywords_with_deduplication(guide_keywords, preprocessed)
+    has_discussion = match_keywords_with_deduplication(discussion_keywords, preprocessed)
+    has_review = match_keywords_with_deduplication(review_keywords, preprocessed)
+    
+    # Suggest intent based on strongest signal
+    # This is a SUGGESTION - rules will decide final classification
+    if has_review:
+        return "REVIEW"
+    elif has_discussion:
+        return "DISCUSSION"
+    elif has_guide:
+        return "GUIDE"
+    elif has_docs:
+        return "DOCUMENTATION"
+    elif has_selling:
+        return "SELLING"
+    else:
+        return "UNKNOWN"
+
+
+def nlp_extract_solution_cues(text: str) -> dict:
+    """
+    NLP ASSISTANT: Extract normalized keywords and cues from solution attributes.
+    
+    This function uses NLP to extract and normalize keywords that may hint at
+    solution characteristics (e.g., "repairing" → "repair" → service-related).
+    
+    IMPORTANT: This provides HINTS only. The calling function must apply
+    deterministic rules to make the final modality classification.
+    
+    Args:
+        text: Solution attribute text (e.g., core_action, output_type)
+        
+    Returns:
+        Dict with:
+        - normalized_text: NLP-normalized text
+        - stems: Stemmed tokens for matching variants
+        - hints: Keyword hints (e.g., "service_related", "software_related")
+    """
+    if not text or not text.strip():
+        return {
+            'normalized_text': '',
+            'stems': [],
+            'hints': []
+        }
+    
+    # === NLP PREPROCESSING ===
+    # Use existing NLP utilities for consistent preprocessing
+    preprocessed = preprocess_text(text)
+    
+    # Extract normalized text and stems
+    normalized_text = preprocessed['original_text']
+    stems = preprocessed['stems']
+    
+    # === HINT GENERATION ===
+    # These are HINTS based on NLP analysis
+    # Rules will use these as ONE input among many
+    
+    hints = []
+    
+    # Service-related hints (based on stemmed keywords)
+    service_stems = {'repair', 'maintain', 'instal', 'clean', 'consult', 'train', 'servic'}
+    if any(stem in service_stems for stem in stems):
+        hints.append('service_related')
+    
+    # Software-related hints
+    software_stems = {'automat', 'ai', 'algorithm', 'machin', 'intellig', 'platform', 'softwar'}
+    if any(stem in software_stems for stem in stems):
+        hints.append('software_related')
+    
+    # Physical product hints
+    physical_stems = {'devic', 'hardwar', 'machin', 'gadget', 'product', 'equip'}
+    if any(stem in physical_stems for stem in stems):
+        hints.append('physical_related')
+    
+    return {
+        'normalized_text': normalized_text,
+        'stems': stems,
+        'hints': hints
+    }
+
+
+# === NLP BOUNDARY — RULES DECIDE AFTER THIS POINT ===
+# The functions above provide NLP-assisted suggestions and features.
+# All classification decisions are made by deterministic rules below.
+
+
 def classify_result_type(result):
     """
     Classify search result as commercial, diy, content, or unknown.
@@ -947,6 +1114,11 @@ def classify_result_type(result):
     PRECEDENCE: commercial > diy > content > unknown
     (But content site check and review/comparison check happen FIRST)
     
+    NLP INTEGRATION:
+    - NLP assists with keyword matching (handles morphological variants)
+    - NLP suggests page intent (ASSISTIVE only)
+    - Rules make ALL final classification decisions
+    
     Args:
         result: Search result dict with 'title', 'snippet', and optionally 'url'
         
@@ -959,22 +1131,54 @@ def classify_result_type(result):
         (result.get("snippet") or "")
     ).lower()
     
+    # === NLP PREPROCESSING (ASSISTIVE) ===
+    # NLP helps with better keyword matching (morphological variants)
+    # Rules still make all decisions
+    try:
+        preprocessed = preprocess_text(text)
+        nlp_available = True
+    except Exception as e:
+        logger.debug(f"NLP preprocessing failed, falling back to simple matching: {e}")
+        preprocessed = None
+        nlp_available = False
+    
+    # Get NLP intent suggestion (ASSISTIVE only, rules decide)
+    try:
+        nlp_intent_suggestion = nlp_suggest_page_intent(text) if nlp_available else "UNKNOWN"
+        logger.debug(f"NLP intent suggestion: {nlp_intent_suggestion}")
+    except Exception as e:
+        logger.debug(f"NLP intent suggestion failed: {e}")
+        nlp_intent_suggestion = "UNKNOWN"
+    
+    # === NLP BOUNDARY — RULES DECIDE FROM HERE ===
+    
     # RULE 1: Check if this is a content/discussion site FIRST
     # Content sites should NEVER be classified as commercial
     if is_content_site(url):
         logger.debug(f"Classified as CONTENT (content site domain): {url}")
         return 'content'
     
-    # Check for signal presence
-    has_strong_product = any(signal in text for signal in STRONG_PRODUCT_SIGNALS)
-    has_commercial = any(kw in text for kw in COMMERCIAL_KEYWORDS)
-    has_diy = any(kw in text for kw in DIY_KEYWORDS)
+    # Check for signal presence using NLP-enhanced matching when available
+    if nlp_available and preprocessed:
+        # NLP-enhanced matching (catches morphological variants)
+        has_strong_product = match_keywords_with_deduplication(
+            list(STRONG_PRODUCT_SIGNALS), preprocessed
+        )
+        has_commercial = match_keywords_with_deduplication(
+            list(COMMERCIAL_KEYWORDS), preprocessed
+        )
+        has_diy = match_keywords_with_deduplication(
+            list(DIY_KEYWORDS), preprocessed
+        )
+    else:
+        # Fallback to simple matching if NLP unavailable
+        has_strong_product = any(signal in text for signal in STRONG_PRODUCT_SIGNALS)
+        has_commercial = any(kw in text for kw in COMMERCIAL_KEYWORDS)
+        has_diy = any(kw in text for kw in DIY_KEYWORDS)
     
     # RULE 2: Strong CONTENT indicators (comparison/review articles)
     # These should be classified as content even if they mention pricing
-    # Check for strong comparison/review patterns
-    # Note: "best" and "top" must be followed by product-related words to avoid false positives
-    # like "best practices" which is not a product comparison
+    # NLP intent suggestion helps identify review pages
     strong_content_patterns = [
         'vs', 'versus', 'comparison', 'compare', 'review', 'reviews',
         'best tool', 'best software', 'best app', 'best product', 'best solution',
@@ -983,6 +1187,10 @@ def classify_result_type(result):
         'roundup', 'listicle', 'alternatives to'
     ]
     has_strong_content = any(pattern in text for pattern in strong_content_patterns)
+    
+    # Use NLP intent as additional signal (not decision)
+    if nlp_intent_suggestion in ["REVIEW", "DISCUSSION"]:
+        has_strong_content = True  # NLP suggests review/discussion
     
     # Weaker content signals (only used in combination with other signals)
     weak_content_signals = ['review', 'comparison', 'guide', 'blog', 'article']
@@ -1576,19 +1784,55 @@ def classify_solution_modality(solution: UserSolution):
     BIAS RULE: When uncertain, choose the LESS automated modality.
     Precedence: SERVICE > PHYSICAL_PRODUCT > HYBRID > SOFTWARE
     
+    NLP INTEGRATION:
+    - NLP assists with extracting normalized keywords (handles morphological variants)
+    - NLP provides hints (e.g., "repair" → service-related)
+    - Rules make ALL final classification decisions
+    
     Args:
         solution: UserSolution with structured attributes
         
     Returns:
         str: "SOFTWARE", "SERVICE", "PHYSICAL_PRODUCT", or "HYBRID"
     """
-    def contains_keyword(text, keywords):
+    # Normalize attributes for matching
+    automation_level = solution.automation_level.lower().strip()
+    core_action = solution.core_action.lower().strip()
+    output_type = solution.output_type.lower().strip()
+    
+    # === NLP ASSISTANCE (OPTIONAL) ===
+    # NLP helps extract normalized keywords and hints
+    # Rules still make all decisions
+    try:
+        action_cues = nlp_extract_solution_cues(core_action)
+        output_cues = nlp_extract_solution_cues(output_type)
+        automation_cues = nlp_extract_solution_cues(automation_level)
+        
+        logger.debug(f"NLP cues - action: {action_cues['hints']}, "
+                    f"output: {output_cues['hints']}, "
+                    f"automation: {automation_cues['hints']}")
+        nlp_available = True
+    except Exception as e:
+        logger.debug(f"NLP cue extraction failed, using simple matching: {e}")
+        action_cues = {'stems': [], 'hints': []}
+        output_cues = {'stems': [], 'hints': []}
+        automation_cues = {'stems': [], 'hints': []}
+        nlp_available = False
+    
+    # === NLP BOUNDARY — RULES DECIDE FROM HERE ===
+    
+    def contains_keyword(text, keywords, nlp_stems=None):
         """
         Check if text contains any keyword using word boundary matching.
-        This prevents false positives like 'ai' matching in 'repair'.
+        Enhanced with NLP stem matching when available.
+        
+        NLP helps catch morphological variants (repair/repairing/repaired)
+        but rules still make the final decision.
         """
         text_lower = text.lower()
         words = text_lower.split()
+        
+        # Rule-based matching (always executed)
         for keyword in keywords:
             # For multi-word keywords (e.g., "machine learning")
             if ' ' in keyword:
@@ -1602,12 +1846,17 @@ def classify_solution_modality(solution: UserSolution):
             else:
                 if keyword in words:
                     return True
+        
+        # NLP-enhanced matching (if available) - catches morphological variants
+        if nlp_stems:
+            from nlp_utils import stem_word
+            for keyword in keywords:
+                keyword_stem = stem_word(keyword)
+                if keyword_stem in nlp_stems:
+                    logger.debug(f"NLP matched variant: {keyword} (stem: {keyword_stem})")
+                    return True
+        
         return False
-    
-    # Normalize attributes for matching
-    automation_level = solution.automation_level.lower().strip()
-    core_action = solution.core_action.lower().strip()
-    output_type = solution.output_type.lower().strip()
     
     # Define keyword sets for classification
     # SERVICE indicators (highest priority - bias toward non-software)
@@ -1640,12 +1889,22 @@ def classify_solution_modality(solution: UserSolution):
     
     # Check for SERVICE indicators FIRST (highest priority per bias rule)
     # Service actions take precedence over physical outputs
-    has_service_action = contains_keyword(core_action, service_keywords)
-    has_low_automation = contains_keyword(automation_level, low_automation_keywords)
+    # NLP helps catch variants like "repairing" → "repair"
+    has_service_action = contains_keyword(
+        core_action, service_keywords, 
+        action_cues['stems'] if nlp_available else None
+    )
+    has_low_automation = contains_keyword(
+        automation_level, low_automation_keywords,
+        automation_cues['stems'] if nlp_available else None
+    )
     
     if has_service_action:
         # Service action detected - check if also has high automation (HYBRID vs pure SERVICE)
-        has_high_automation = contains_keyword(automation_level, high_automation_keywords)
+        has_high_automation = contains_keyword(
+            automation_level, high_automation_keywords,
+            automation_cues['stems'] if nlp_available else None
+        )
         
         if has_high_automation:
             # HYBRID: Service with automation components
@@ -1664,11 +1923,17 @@ def classify_solution_modality(solution: UserSolution):
     
     # Check for PHYSICAL_PRODUCT indicators (before low automation check)
     # Physical products take precedence over generic low automation
-    has_physical_output = contains_keyword(output_type, physical_output_keywords)
+    has_physical_output = contains_keyword(
+        output_type, physical_output_keywords,
+        output_cues['stems'] if nlp_available else None
+    )
     
     if has_physical_output:
         # Check if also has software/service components
-        has_high_automation = contains_keyword(automation_level, high_automation_keywords)
+        has_high_automation = contains_keyword(
+            automation_level, high_automation_keywords,
+            automation_cues['stems'] if nlp_available else None
+        )
         
         if has_high_automation:
             # HYBRID: Physical product with software/service
@@ -1695,7 +1960,10 @@ def classify_solution_modality(solution: UserSolution):
         return "SERVICE"
     
     # Check for clear SOFTWARE indicators
-    has_high_automation = contains_keyword(automation_level, high_automation_keywords)
+    has_high_automation = contains_keyword(
+        automation_level, high_automation_keywords,
+        automation_cues['stems'] if nlp_available else None
+    )
     
     if has_high_automation:
         # SOFTWARE: High automation, no service/physical indicators
