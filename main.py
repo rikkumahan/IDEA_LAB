@@ -705,10 +705,14 @@ def classify_problem_level(signals):
     
     Guardrails (in order of application):
     1. Zero-signal check: All counts == 0 → LOW (defensive programming)
-    2. Workaround cap: intensity==0 AND complaints<=1 → cap workaround at 3
-    3. DRASTIC guardrail: intensity_level != HIGH → downgrade to SEVERE
-    4. SEVERE guardrail: intensity_count == 0 → downgrade to MODERATE
+    2. Workaround absolute cap: cap at 5 unconditionally (INVARIANT)
+    3. Total signal floor: Minimum signals required for each severity level (INVARIANT)
+    4. DRASTIC intensity floor: Requires >= 7 intensity signals (INVARIANT)
+    5. DRASTIC guardrail: intensity_level != HIGH → downgrade to SEVERE
+    6. SEVERE guardrail: intensity_count == 0 → downgrade to MODERATE
+    7. Total signal ceiling: Maximum severity based on total evidence (INVARIANT)
     
+    Cross-domain invariants ensure consistent behavior regardless of problem domain.
     All guardrails are deterministic and rule-based, NOT weight changes.
     
     Args:
@@ -729,16 +733,17 @@ def classify_problem_level(signals):
         logger.info("Zero signals detected - returning LOW")
         return "LOW"
     
-    # GUARDRAIL 2: Workaround cap when intensity/complaints are minimal
-    # Prevents workaround-only problems from inflating severity
-    effective_workaround = workaround_count
-    if intensity_count == 0 and complaint_count <= 1:
-        effective_workaround = min(workaround_count, 3)
-        if effective_workaround < workaround_count:
-            logger.info(
-                f"Applying workaround cap: intensity=0, complaints={complaint_count}, "
-                f"capping workaround from {workaround_count} to {effective_workaround}"
-            )
+    # GUARDRAIL 2: Workaround absolute cap (INVARIANT)
+    # Cap workarounds unconditionally to prevent ratio gaming
+    # This replaces the conditional cap that depended on intensity/complaint ratios
+    MAX_WORKAROUND_CONTRIBUTION = 5
+    effective_workaround = min(workaround_count, MAX_WORKAROUND_CONTRIBUTION)
+    
+    if effective_workaround < workaround_count:
+        logger.info(
+            f"Applying workaround absolute cap: {workaround_count} → {effective_workaround} "
+            f"(unconditional maximum, INVARIANT guard)"
+        )
     
     # Calculate score with capped workaround count
     score = (
@@ -760,7 +765,41 @@ def classify_problem_level(signals):
     else:
         problem_level = "LOW"
     
-    # GUARDRAIL 3: DRASTIC only possible when intensity_level == HIGH
+    # GUARDRAIL 3: Total signal floor (INVARIANT)
+    # Enforce minimum total signals for each severity level
+    # Prevents sparse data with favorable ratios from achieving high severity
+    if problem_level == "DRASTIC" and total_signals < 10:
+        logger.info(
+            f"Total signal floor INVARIANT: {total_signals} < 10 for DRASTIC, "
+            f"downgrading to SEVERE (prevents sparse data inflation)"
+        )
+        problem_level = "SEVERE"
+    
+    if problem_level == "SEVERE" and total_signals < 6:
+        logger.info(
+            f"Total signal floor INVARIANT: {total_signals} < 6 for SEVERE, "
+            f"downgrading to MODERATE (prevents sparse data inflation)"
+        )
+        problem_level = "MODERATE"
+    
+    if problem_level == "MODERATE" and total_signals < 3:
+        logger.info(
+            f"Total signal floor INVARIANT: {total_signals} < 3 for MODERATE, "
+            f"downgrading to LOW (prevents sparse data inflation)"
+        )
+        problem_level = "LOW"
+    
+    # GUARDRAIL 4: DRASTIC intensity floor (INVARIANT)
+    # Requires substantial intensity evidence, not just intensity_level=HIGH
+    # Prevents barely meeting threshold (5 signals) from triggering DRASTIC
+    if problem_level == "DRASTIC" and intensity_count < 7:
+        logger.info(
+            f"DRASTIC intensity floor INVARIANT: {intensity_count} < 7, "
+            f"downgrading to SEVERE despite intensity_level={intensity_level}"
+        )
+        problem_level = "SEVERE"
+    
+    # GUARDRAIL 5: DRASTIC only possible when intensity_level == HIGH
     if problem_level == "DRASTIC" and intensity_level != "HIGH":
         logger.info(
             f"Applying DRASTIC guardrail: intensity_level={intensity_level} (not HIGH), "
@@ -768,7 +807,7 @@ def classify_problem_level(signals):
         )
         problem_level = "SEVERE"
     
-    # GUARDRAIL 4: SEVERE requires intensity_count >= 1
+    # GUARDRAIL 6: SEVERE requires intensity_count >= 1
     # Prevents false urgency from complaint/workaround volume alone
     if problem_level == "SEVERE" and intensity_count == 0:
         logger.info(
@@ -777,12 +816,54 @@ def classify_problem_level(signals):
         )
         problem_level = "MODERATE"
     
+    # GUARDRAIL 7: Total signal ceiling (INVARIANT)
+    # Maximum severity based on total evidence volume
+    # Prevents ratio optimization from inflating severity with sparse data
+    # Ceiling should be MORE permissive than floor to avoid conflicts
+    # Floor: minimum needed. Ceiling: absolute maximum possible.
+    if total_signals < 3:
+        max_severity = "LOW"  # < 3 signals can't even reach MODERATE
+    elif total_signals < 6:
+        max_severity = "MODERATE"  # 3-5 signals: MODERATE at most
+    elif total_signals < 10:
+        max_severity = "SEVERE"  # 6-9 signals: SEVERE at most (floor allows at 6+)
+    elif total_signals < 20:
+        max_severity = "SEVERE"  # 10-19: Still SEVERE max (DRASTIC needs 20+ for ceiling)
+    else:
+        max_severity = "DRASTIC"  # 20+: DRASTIC possible
+    
+    # Enforce ceiling
+    severity_order = ["LOW", "MODERATE", "SEVERE", "DRASTIC"]
+    if problem_level in severity_order and max_severity in severity_order:
+        problem_level_index = severity_order.index(problem_level)
+        max_severity_index = severity_order.index(max_severity)
+        
+        if problem_level_index > max_severity_index:
+            logger.info(
+                f"Total signal ceiling INVARIANT: {total_signals} signals caps at {max_severity}, "
+                f"downgrading from {problem_level} (prevents ratio gaming)"
+            )
+            problem_level = max_severity
+    
     # ASSERTIONS: Verify guardrail invariants
     assert problem_level != "DRASTIC" or intensity_level == "HIGH", \
         f"DRASTIC problem level requires HIGH intensity_level, got {intensity_level}"
     
     assert problem_level != "SEVERE" or intensity_count >= 1, \
         f"SEVERE problem level requires intensity_count >= 1, got {intensity_count}"
+    
+    # INVARIANT ASSERTIONS: Verify cross-domain invariants
+    assert problem_level != "DRASTIC" or total_signals >= 10, \
+        f"DRASTIC requires >= 10 total signals (INVARIANT), got {total_signals}"
+    
+    assert problem_level != "DRASTIC" or intensity_count >= 7, \
+        f"DRASTIC requires >= 7 intensity signals (INVARIANT), got {intensity_count}"
+    
+    assert problem_level != "SEVERE" or total_signals >= 6, \
+        f"SEVERE requires >= 6 total signals (INVARIANT), got {total_signals}"
+    
+    assert problem_level != "MODERATE" or total_signals >= 3, \
+        f"MODERATE requires >= 3 total signals (INVARIANT), got {total_signals}"
     
     return problem_level
 
