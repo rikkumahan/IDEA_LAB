@@ -918,6 +918,173 @@ def is_content_site(url):
     return False
 
 
+# ============================================================================
+# NLP ASSISTANT FUNCTIONS
+# ============================================================================
+# These functions use NLP to SUGGEST features and labels.
+# They are ASSISTANTS, not DECIDERS.
+# 
+# CRITICAL RULES:
+# - NLP suggests candidates or features
+# - Deterministic rules make ALL final decisions
+# - NLP outputs are NEVER written directly to final JSON
+# - If NLP fails, rules must still work (graceful fallback)
+# ============================================================================
+
+def nlp_suggest_page_intent(text: str) -> str:
+    """
+    NLP ASSISTANT: Suggest page intent based on text analysis.
+    
+    This function uses NLP to SUGGEST (not decide) the primary intent of a page.
+    
+    IMPORTANT: This is a SUGGESTION only. The calling function must apply
+    deterministic rules to make the final classification decision.
+    
+    Possible intents:
+    - SELLING: Page is trying to sell a product/service
+    - DOCUMENTATION: Technical docs, API references
+    - GUIDE: How-to guides, tutorials
+    - DISCUSSION: Forums, Q&A, comments
+    - REVIEW: Product reviews, comparisons
+    - UNKNOWN: Cannot determine intent
+    
+    Args:
+        text: Text to analyze (title + snippet)
+        
+    Returns:
+        Intent label (suggestion only, NOT a final decision)
+    """
+    if not text or not text.strip():
+        return "UNKNOWN"
+    
+    # === NLP PREPROCESSING ===
+    # Use existing NLP utilities for consistent preprocessing
+    preprocessed = preprocess_text(text)
+    
+    # === INTENT DETECTION USING NLP-ENHANCED MATCHING ===
+    # These are SUGGESTIONS based on NLP analysis
+    # Rules will validate and make final decisions
+    
+    # SELLING intent keywords
+    selling_keywords = [
+        'pricing', 'subscription', 'sign up', 'free trial',
+        'get started', 'buy now', 'purchase', 'upgrade'
+    ]
+    
+    # DOCUMENTATION intent keywords
+    docs_keywords = [
+        'documentation', 'api reference', 'developer guide',
+        'api docs', 'technical specs'
+    ]
+    
+    # GUIDE intent keywords
+    guide_keywords = [
+        'how to', 'tutorial', 'step by step', 'guide',
+        'getting started', 'learn', 'beginners'
+    ]
+    
+    # DISCUSSION intent keywords
+    discussion_keywords = [
+        'forum', 'thread', 'discussion', 'ask', 'question',
+        'comment', 'reddit', 'stack overflow'
+    ]
+    
+    # REVIEW intent keywords
+    review_keywords = [
+        'review', 'comparison', 'vs', 'versus', 'best',
+        'alternatives', 'pros and cons'
+    ]
+    
+    # Use NLP-enhanced matching for better accuracy
+    has_selling = match_keywords_with_deduplication(selling_keywords, preprocessed)
+    has_docs = match_keywords_with_deduplication(docs_keywords, preprocessed)
+    has_guide = match_keywords_with_deduplication(guide_keywords, preprocessed)
+    has_discussion = match_keywords_with_deduplication(discussion_keywords, preprocessed)
+    has_review = match_keywords_with_deduplication(review_keywords, preprocessed)
+    
+    # Suggest intent based on strongest signal
+    # This is a SUGGESTION - rules will decide final classification
+    if has_review:
+        return "REVIEW"
+    elif has_discussion:
+        return "DISCUSSION"
+    elif has_guide:
+        return "GUIDE"
+    elif has_docs:
+        return "DOCUMENTATION"
+    elif has_selling:
+        return "SELLING"
+    else:
+        return "UNKNOWN"
+
+
+def nlp_extract_solution_cues(text: str) -> dict:
+    """
+    NLP ASSISTANT: Extract normalized keywords and cues from solution attributes.
+    
+    This function uses NLP to extract and normalize keywords that may hint at
+    solution characteristics (e.g., "repairing" → "repair" → service-related).
+    
+    IMPORTANT: This provides HINTS only. The calling function must apply
+    deterministic rules to make the final modality classification.
+    
+    Args:
+        text: Solution attribute text (e.g., core_action, output_type)
+        
+    Returns:
+        Dict with:
+        - normalized_text: NLP-normalized text
+        - stems: Stemmed tokens for matching variants
+        - hints: Keyword hints (e.g., "service_related", "software_related")
+    """
+    if not text or not text.strip():
+        return {
+            'normalized_text': '',
+            'stems': [],
+            'hints': []
+        }
+    
+    # === NLP PREPROCESSING ===
+    # Use existing NLP utilities for consistent preprocessing
+    preprocessed = preprocess_text(text)
+    
+    # Extract normalized text and stems
+    normalized_text = preprocessed['original_text']
+    stems = preprocessed['stems']
+    
+    # === HINT GENERATION ===
+    # These are HINTS based on NLP analysis
+    # Rules will use these as ONE input among many
+    
+    hints = []
+    
+    # Service-related hints (based on stemmed keywords)
+    service_stems = {'repair', 'maintain', 'instal', 'clean', 'consult', 'train', 'servic'}
+    if any(stem in service_stems for stem in stems):
+        hints.append('service_related')
+    
+    # Software-related hints
+    software_stems = {'automat', 'ai', 'algorithm', 'machin', 'intellig', 'platform', 'softwar'}
+    if any(stem in software_stems for stem in stems):
+        hints.append('software_related')
+    
+    # Physical product hints
+    physical_stems = {'devic', 'hardwar', 'machin', 'gadget', 'product', 'equip'}
+    if any(stem in physical_stems for stem in stems):
+        hints.append('physical_related')
+    
+    return {
+        'normalized_text': normalized_text,
+        'stems': stems,
+        'hints': hints
+    }
+
+
+# === NLP BOUNDARY — RULES DECIDE AFTER THIS POINT ===
+# The functions above provide NLP-assisted suggestions and features.
+# All classification decisions are made by deterministic rules below.
+
+
 def classify_result_type(result):
     """
     Classify search result as commercial, diy, content, or unknown.
@@ -947,6 +1114,11 @@ def classify_result_type(result):
     PRECEDENCE: commercial > diy > content > unknown
     (But content site check and review/comparison check happen FIRST)
     
+    NLP INTEGRATION:
+    - NLP assists with keyword matching (handles morphological variants)
+    - NLP suggests page intent (ASSISTIVE only)
+    - Rules make ALL final classification decisions
+    
     Args:
         result: Search result dict with 'title', 'snippet', and optionally 'url'
         
@@ -959,22 +1131,54 @@ def classify_result_type(result):
         (result.get("snippet") or "")
     ).lower()
     
+    # === NLP PREPROCESSING (ASSISTIVE) ===
+    # NLP helps with better keyword matching (morphological variants)
+    # Rules still make all decisions
+    try:
+        preprocessed = preprocess_text(text)
+        nlp_available = True
+    except Exception as e:
+        logger.debug(f"NLP preprocessing failed, falling back to simple matching: {e}")
+        preprocessed = None
+        nlp_available = False
+    
+    # Get NLP intent suggestion (ASSISTIVE only, rules decide)
+    try:
+        nlp_intent_suggestion = nlp_suggest_page_intent(text) if nlp_available else "UNKNOWN"
+        logger.debug(f"NLP intent suggestion: {nlp_intent_suggestion}")
+    except Exception as e:
+        logger.debug(f"NLP intent suggestion failed: {e}")
+        nlp_intent_suggestion = "UNKNOWN"
+    
+    # === NLP BOUNDARY — RULES DECIDE FROM HERE ===
+    
     # RULE 1: Check if this is a content/discussion site FIRST
     # Content sites should NEVER be classified as commercial
     if is_content_site(url):
         logger.debug(f"Classified as CONTENT (content site domain): {url}")
         return 'content'
     
-    # Check for signal presence
-    has_strong_product = any(signal in text for signal in STRONG_PRODUCT_SIGNALS)
-    has_commercial = any(kw in text for kw in COMMERCIAL_KEYWORDS)
-    has_diy = any(kw in text for kw in DIY_KEYWORDS)
+    # Check for signal presence using NLP-enhanced matching when available
+    if nlp_available and preprocessed:
+        # NLP-enhanced matching (catches morphological variants)
+        has_strong_product = match_keywords_with_deduplication(
+            list(STRONG_PRODUCT_SIGNALS), preprocessed
+        )
+        has_commercial = match_keywords_with_deduplication(
+            list(COMMERCIAL_KEYWORDS), preprocessed
+        )
+        has_diy = match_keywords_with_deduplication(
+            list(DIY_KEYWORDS), preprocessed
+        )
+    else:
+        # Fallback to simple matching if NLP unavailable
+        has_strong_product = any(signal in text for signal in STRONG_PRODUCT_SIGNALS)
+        has_commercial = any(kw in text for kw in COMMERCIAL_KEYWORDS)
+        has_diy = any(kw in text for kw in DIY_KEYWORDS)
     
     # RULE 2: Strong CONTENT indicators (comparison/review articles)
     # These should be classified as content even if they mention pricing
-    # Check for strong comparison/review patterns
-    # Note: "best" and "top" must be followed by product-related words to avoid false positives
-    # like "best practices" which is not a product comparison
+    # NLP intent suggestion helps identify review pages
     strong_content_patterns = [
         'vs', 'versus', 'comparison', 'compare', 'review', 'reviews',
         'best tool', 'best software', 'best app', 'best product', 'best solution',
@@ -983,6 +1187,10 @@ def classify_result_type(result):
         'roundup', 'listicle', 'alternatives to'
     ]
     has_strong_content = any(pattern in text for pattern in strong_content_patterns)
+    
+    # Use NLP intent as additional signal (not decision)
+    if nlp_intent_suggestion in ["REVIEW", "DISCUSSION"]:
+        has_strong_content = True  # NLP suggests review/discussion
     
     # Weaker content signals (only used in combination with other signals)
     weak_content_signals = ['review', 'comparison', 'guide', 'blog', 'article']
@@ -1437,146 +1645,105 @@ def detect_solution_class_existence(tool_results):
     }
 
 
+# ============================================================================
+# DISABLED: Problem-based competition analysis
+# ============================================================================
+# This function has been DISABLED as part of the Stage 1/Stage 2 separation.
+# 
+# REASON: Competition analysis MUST be driven by the USER SOLUTION, not the problem.
+# Problem-based competitor search violates the architectural boundary:
+#   - Stage 1 = Problem Reality Engine (no market signals)
+#   - Stage 2 = User Solution Market Analysis (all market signals)
+#
+# Market analysis now happens ONLY in Stage 2 via analyze_user_solution_competitors()
+# ============================================================================
 def analyze_competition(problem: str):
     """
-    Analyze competition pressure for a problem.
+    DISABLED: Problem-based competition analysis.
     
-    This implements ISSUE 2: Competition pressure computation.
+    This function has been disabled to enforce Stage 1/Stage 2 separation.
+    Competition analysis now happens ONLY in Stage 2 when a user solution is provided.
     
+    DO NOT RE-ENABLE this function. It violates architectural boundaries.
+    
+    Args:
+        problem: Problem statement (NOT used for competition analysis)
+        
     Returns:
-        Dict with commercial and DIY competition metrics
+        Empty dict indicating no problem-based competition analysis
     """
-    queries = generate_search_queries(problem)
-    
-    # Run tool queries to find competitors
-    tool_results = run_multiple_searches(queries["tool_queries"])
-    tool_results = deduplicate_results(tool_results)
-    
-    # Run workaround queries to find DIY alternatives
-    workaround_results = run_multiple_searches(queries["workaround_queries"])
-    workaround_results = deduplicate_results(workaround_results)
-    
-    # Separate commercial vs DIY (fixes ISSUE 1: bucket mixing)
-    tool_results, workaround_results = separate_tool_workaround_results(
-        tool_results, workaround_results
+    logger.warning(
+        "analyze_competition() called but is DISABLED. "
+        "Competition analysis must be done in Stage 2 with a user solution."
     )
-    
-    commercial_count = len(tool_results)
-    diy_count = len(workaround_results)
-    
-    # Compute pressure levels (ISSUE 4: deterministic thresholds)
-    commercial_pressure = compute_competition_pressure(
-        commercial_count, 
-        competition_type='commercial'
-    )
-    diy_pressure = compute_competition_pressure(
-        diy_count, 
-        competition_type='diy'
-    )
-    
-    # Overall pressure: worst of commercial or DIY
-    if commercial_pressure == "HIGH" or diy_pressure == "HIGH":
-        overall_pressure = "HIGH"
-    elif commercial_pressure == "MEDIUM" or diy_pressure == "MEDIUM":
-        overall_pressure = "MEDIUM"
-    else:
-        overall_pressure = "LOW"
-    
-    # Detect solution-class existence (product category maturity signal)
-    solution_class = detect_solution_class_existence(tool_results)
-    
     return {
-        "commercial_competitors": {
-            "count": commercial_count,
-            "pressure": commercial_pressure,
-            "top_5": [
-                {'title': r.get('title'), 'url': r.get('url')}
-                for r in tool_results[:5]
-            ]
-        },
-        "diy_alternatives": {
-            "count": diy_count,
-            "pressure": diy_pressure,
-            "top_5": [
-                {'title': r.get('title'), 'url': r.get('url')}
-                for r in workaround_results[:5]
-            ]
-        },
-        "overall_pressure": overall_pressure,
-        "solution_class_exists": solution_class,
-        "queries_used": {
-            "tool_queries": queries["tool_queries"],
-            "workaround_queries": queries["workaround_queries"]
-        }
+        "disabled": True,
+        "reason": "Competition analysis requires a user solution (Stage 2 only)",
+        "message": "Use /analyze-user-solution endpoint with solution attributes"
     }
 
 
+# ============================================================================
+# DISABLED: Problem-based content saturation analysis
+# ============================================================================
+# This function has been DISABLED as part of the Stage 1/Stage 2 separation.
+#
+# REASON: Content saturation MUST be relative to the USER SOLUTION, not the problem.
+# Problem-based content analysis violates the architectural boundary.
+#
+# Content saturation now happens ONLY in Stage 2 as a market strength parameter.
+# ============================================================================
 def analyze_content_saturation(problem: str):
     """
-    Analyze content saturation for a problem.
+    DISABLED: Problem-based content saturation analysis.
     
-    This implements ISSUE 2: Content saturation computation.
+    This function has been disabled to enforce Stage 1/Stage 2 separation.
+    Content saturation analysis now happens ONLY in Stage 2 relative to the user solution.
     
+    DO NOT RE-ENABLE this function. It violates architectural boundaries.
+    
+    Args:
+        problem: Problem statement (NOT used for content saturation analysis)
+        
     Returns:
-        Dict with content saturation metrics
+        Empty dict indicating no problem-based content saturation analysis
     """
-    queries = generate_search_queries(problem)
-    
-    # Run blog queries to find educational content
-    blog_results = run_multiple_searches(queries["blog_queries"])
-    blog_results = deduplicate_results(blog_results)
-    
-    content_count = len(blog_results)
-    
-    # Deterministic thresholds for saturation level
-    if content_count >= 15:
-        saturation_level = "HIGH"
-    elif content_count >= 6:
-        saturation_level = "MEDIUM"
-    else:
-        saturation_level = "LOW"
-    
-    # Classify as NEGATIVE or NEUTRAL (ISSUE 3: interpretation rules)
-    saturation_signal = classify_saturation_signal(content_count, blog_results)
-    
+    logger.warning(
+        "analyze_content_saturation() called but is DISABLED. "
+        "Content saturation analysis must be done in Stage 2 relative to user solution."
+    )
     return {
-        "content_count": content_count,
-        "saturation_level": saturation_level,
-        "saturation_signal": saturation_signal,
-        "queries_used": queries["blog_queries"],
-        "top_5": [
-            {'title': r.get('title'), 'url': r.get('url')}
-            for r in blog_results[:5]
-        ]
+        "disabled": True,
+        "reason": "Content saturation requires a user solution (Stage 2 only)",
+        "message": "Use /analyze-user-solution endpoint with solution attributes"
     }
 
 
 @app.post("/analyze-market")
 def analyze_market(data: IdeaInput):
     """
-    Comprehensive market analysis combining problem severity, competition, and content.
+    UPDATED: Market analysis endpoint (Stage 1 only - problem severity).
     
-    This is the new endpoint that uses ALL query buckets:
-    - complaint_queries → problem severity
-    - tool_queries + workaround_queries → competition pressure
-    - blog_queries → content saturation
+    ARCHITECTURAL CHANGE:
+    This endpoint now returns ONLY Stage 1 problem severity analysis.
+    Competition and content saturation have been removed from this endpoint.
+    
+    REASON: Market analysis must be driven by USER SOLUTION, not problem statement.
+    - Stage 1 (this endpoint) = Problem Reality Engine (no market signals)
+    - Stage 2 (/analyze-user-solution) = User Solution Market Analysis (all market signals)
+    
+    For market analysis, use /analyze-user-solution with solution attributes.
     
     Returns:
-        Dict with problem, competition, and content_saturation analyses
+        Dict with problem severity analysis only (NO competition or content saturation)
     """
-    # Problem severity analysis (existing)
+    # Problem severity analysis (Stage 1 - unchanged)
     problem_analysis = analyze_idea(data)
-    
-    # Competition analysis (new - ISSUE 2)
-    competition_analysis = analyze_competition(data.problem)
-    
-    # Content saturation analysis (new - ISSUE 2)
-    content_analysis = analyze_content_saturation(data.problem)
     
     return {
         "problem": problem_analysis,
-        "competition": competition_analysis,
-        "content_saturation": content_analysis
+        # NOTE: competition and content_saturation fields removed
+        # These are now Stage 2 only (available via /analyze-user-solution)
     }
 
 
@@ -1617,19 +1784,55 @@ def classify_solution_modality(solution: UserSolution):
     BIAS RULE: When uncertain, choose the LESS automated modality.
     Precedence: SERVICE > PHYSICAL_PRODUCT > HYBRID > SOFTWARE
     
+    NLP INTEGRATION:
+    - NLP assists with extracting normalized keywords (handles morphological variants)
+    - NLP provides hints (e.g., "repair" → service-related)
+    - Rules make ALL final classification decisions
+    
     Args:
         solution: UserSolution with structured attributes
         
     Returns:
         str: "SOFTWARE", "SERVICE", "PHYSICAL_PRODUCT", or "HYBRID"
     """
-    def contains_keyword(text, keywords):
+    # Normalize attributes for matching
+    automation_level = solution.automation_level.lower().strip()
+    core_action = solution.core_action.lower().strip()
+    output_type = solution.output_type.lower().strip()
+    
+    # === NLP ASSISTANCE (OPTIONAL) ===
+    # NLP helps extract normalized keywords and hints
+    # Rules still make all decisions
+    try:
+        action_cues = nlp_extract_solution_cues(core_action)
+        output_cues = nlp_extract_solution_cues(output_type)
+        automation_cues = nlp_extract_solution_cues(automation_level)
+        
+        logger.debug(f"NLP cues - action: {action_cues['hints']}, "
+                    f"output: {output_cues['hints']}, "
+                    f"automation: {automation_cues['hints']}")
+        nlp_available = True
+    except Exception as e:
+        logger.debug(f"NLP cue extraction failed, using simple matching: {e}")
+        action_cues = {'stems': [], 'hints': []}
+        output_cues = {'stems': [], 'hints': []}
+        automation_cues = {'stems': [], 'hints': []}
+        nlp_available = False
+    
+    # === NLP BOUNDARY — RULES DECIDE FROM HERE ===
+    
+    def contains_keyword(text, keywords, nlp_stems=None):
         """
         Check if text contains any keyword using word boundary matching.
-        This prevents false positives like 'ai' matching in 'repair'.
+        Enhanced with NLP stem matching when available.
+        
+        NLP helps catch morphological variants (repair/repairing/repaired)
+        but rules still make the final decision.
         """
         text_lower = text.lower()
         words = text_lower.split()
+        
+        # Rule-based matching (always executed)
         for keyword in keywords:
             # For multi-word keywords (e.g., "machine learning")
             if ' ' in keyword:
@@ -1643,12 +1846,17 @@ def classify_solution_modality(solution: UserSolution):
             else:
                 if keyword in words:
                     return True
+        
+        # NLP-enhanced matching (if available) - catches morphological variants
+        if nlp_stems:
+            from nlp_utils import stem_word
+            for keyword in keywords:
+                keyword_stem = stem_word(keyword)
+                if keyword_stem in nlp_stems:
+                    logger.debug(f"NLP matched variant: {keyword} (stem: {keyword_stem})")
+                    return True
+        
         return False
-    
-    # Normalize attributes for matching
-    automation_level = solution.automation_level.lower().strip()
-    core_action = solution.core_action.lower().strip()
-    output_type = solution.output_type.lower().strip()
     
     # Define keyword sets for classification
     # SERVICE indicators (highest priority - bias toward non-software)
@@ -1681,12 +1889,22 @@ def classify_solution_modality(solution: UserSolution):
     
     # Check for SERVICE indicators FIRST (highest priority per bias rule)
     # Service actions take precedence over physical outputs
-    has_service_action = contains_keyword(core_action, service_keywords)
-    has_low_automation = contains_keyword(automation_level, low_automation_keywords)
+    # NLP helps catch variants like "repairing" → "repair"
+    has_service_action = contains_keyword(
+        core_action, service_keywords, 
+        action_cues['stems'] if nlp_available else None
+    )
+    has_low_automation = contains_keyword(
+        automation_level, low_automation_keywords,
+        automation_cues['stems'] if nlp_available else None
+    )
     
     if has_service_action:
         # Service action detected - check if also has high automation (HYBRID vs pure SERVICE)
-        has_high_automation = contains_keyword(automation_level, high_automation_keywords)
+        has_high_automation = contains_keyword(
+            automation_level, high_automation_keywords,
+            automation_cues['stems'] if nlp_available else None
+        )
         
         if has_high_automation:
             # HYBRID: Service with automation components
@@ -1705,11 +1923,17 @@ def classify_solution_modality(solution: UserSolution):
     
     # Check for PHYSICAL_PRODUCT indicators (before low automation check)
     # Physical products take precedence over generic low automation
-    has_physical_output = contains_keyword(output_type, physical_output_keywords)
+    has_physical_output = contains_keyword(
+        output_type, physical_output_keywords,
+        output_cues['stems'] if nlp_available else None
+    )
     
     if has_physical_output:
         # Check if also has software/service components
-        has_high_automation = contains_keyword(automation_level, high_automation_keywords)
+        has_high_automation = contains_keyword(
+            automation_level, high_automation_keywords,
+            automation_cues['stems'] if nlp_available else None
+        )
         
         if has_high_automation:
             # HYBRID: Physical product with software/service
@@ -1736,7 +1960,10 @@ def classify_solution_modality(solution: UserSolution):
         return "SERVICE"
     
     # Check for clear SOFTWARE indicators
-    has_high_automation = contains_keyword(automation_level, high_automation_keywords)
+    has_high_automation = contains_keyword(
+        automation_level, high_automation_keywords,
+        automation_cues['stems'] if nlp_available else None
+    )
     
     if has_high_automation:
         # SOFTWARE: High automation, no service/physical indicators
@@ -1917,66 +2144,410 @@ def extract_pricing_model(result):
     return 'unknown'
 
 
+# ============================================================================
+# STAGE 2: MARKET STRENGTH PARAMETERS
+# ============================================================================
+# These functions compute structured market strength parameters for Stage 2.
+# 
+# CRITICAL RULES:
+# - All functions are deterministic and rule-based (no LLM, no ML)
+# - Parameters are INDEPENDENT (no aggregation, no scoring)
+# - Each parameter answers ONE specific market question
+# - Output is structured facts, NOT conclusions or advice
+#
+# These parameters are consumed by downstream logic and LLM reasoning,
+# but Stage 2 itself does NOT reason about success or strategy.
+# ============================================================================
+
+def compute_competitor_density(commercial_count: int, modality: str) -> str:
+    """
+    Compute competitor density based on number of direct competitors found.
+    
+    This is a FACTUAL market signal, not a judgment about startup viability.
+    
+    RULES (deterministic thresholds):
+    - SOFTWARE: NONE (0), LOW (1-3), MEDIUM (4-9), HIGH (10+)
+    - SERVICE/PHYSICAL_PRODUCT: More tolerance for fragmented markets
+      NONE (0), LOW (1-5), MEDIUM (6-15), HIGH (16+)
+    - HYBRID: Use SOFTWARE thresholds (stricter)
+    
+    Args:
+        commercial_count: Number of commercial competitors found
+        modality: Solution modality (SOFTWARE, SERVICE, PHYSICAL_PRODUCT, HYBRID)
+        
+    Returns:
+        "NONE", "LOW", "MEDIUM", or "HIGH"
+    """
+    # Adjust thresholds based on modality
+    if modality in ["SERVICE", "PHYSICAL_PRODUCT"]:
+        # Service/physical markets are often fragmented with many local providers
+        # Higher tolerance before considering density "high"
+        if commercial_count == 0:
+            return "NONE"
+        elif commercial_count <= 5:
+            return "LOW"
+        elif commercial_count <= 15:
+            return "MEDIUM"
+        else:
+            return "HIGH"
+    else:
+        # SOFTWARE and HYBRID: stricter thresholds (software markets consolidate faster)
+        if commercial_count == 0:
+            return "NONE"
+        elif commercial_count <= 3:
+            return "LOW"
+        elif commercial_count <= 9:
+            return "MEDIUM"
+        else:
+            return "HIGH"
+
+
+def compute_market_fragmentation(
+    commercial_products: list,
+    modality: str
+) -> str:
+    """
+    Compute market fragmentation based on competitor characteristics.
+    
+    Fragmented markets have many small, specialized competitors.
+    Consolidated markets have few dominant players.
+    
+    RULES (deterministic heuristics):
+    1. Count local/small business indicators vs enterprise indicators
+    2. SERVICE/PHYSICAL_PRODUCT: Bias toward FRAGMENTED (local businesses)
+    3. SOFTWARE: Look for consolidation signals (enterprise, platform, market leader)
+    
+    Args:
+        commercial_products: List of competitor dicts with 'snippet' and 'name'
+        modality: Solution modality
+        
+    Returns:
+        "CONSOLIDATED", "FRAGMENTED", or "MIXED"
+    """
+    if not commercial_products:
+        # No competitors found - cannot determine fragmentation
+        return "MIXED"
+    
+    # Count fragmentation vs consolidation signals
+    local_indicators = ['local', 'near me', 'small business', 'independent', 'boutique']
+    enterprise_indicators = ['enterprise', 'platform', 'market leader', 'industry standard', 'fortune']
+    
+    local_count = 0
+    enterprise_count = 0
+    
+    for product in commercial_products:
+        text = (
+            (product.get('name') or '') + ' ' +
+            (product.get('snippet') or '')
+        ).lower()
+        
+        if any(indicator in text for indicator in local_indicators):
+            local_count += 1
+        
+        if any(indicator in text for indicator in enterprise_indicators):
+            enterprise_count += 1
+    
+    # Modality-specific biases
+    if modality in ["SERVICE", "PHYSICAL_PRODUCT"]:
+        # SERVICE/PHYSICAL_PRODUCT markets are typically fragmented (local businesses)
+        # Bias toward FRAGMENTED unless strong consolidation signals
+        if enterprise_count > len(commercial_products) * 0.5:
+            return "CONSOLIDATED"
+        elif local_count > 0 or len(commercial_products) > 10:
+            return "FRAGMENTED"
+        else:
+            return "MIXED"
+    else:
+        # SOFTWARE/HYBRID: More likely to consolidate
+        if enterprise_count > local_count * 2:
+            return "CONSOLIDATED"
+        elif local_count > enterprise_count * 2:
+            return "FRAGMENTED"
+        else:
+            return "MIXED"
+
+
+def compute_substitute_pressure(
+    diy_results: list,
+    modality: str,
+    automation_level: str
+) -> str:
+    """
+    Compute substitute pressure from DIY solutions, manual processes, and human services.
+    
+    FACTUAL SIGNAL: How many non-commercial alternatives exist?
+    - DIY tutorials, scripts, manual processes
+    - Human services (for SOFTWARE solutions)
+    - Manual/offline alternatives (for SERVICE solutions)
+    
+    RULES (deterministic thresholds):
+    - Count DIY/workaround results
+    - Adjust thresholds based on modality and automation level
+    - HIGH automation means more sensitive to substitutes
+    
+    Args:
+        diy_results: List of DIY/tutorial search results
+        modality: Solution modality
+        automation_level: Automation level from user solution
+        
+    Returns:
+        "LOW", "MEDIUM", or "HIGH"
+    """
+    diy_count = len(diy_results)
+    
+    # Adjust thresholds based on automation level
+    # High automation solutions are more vulnerable to manual/DIY substitutes
+    if 'high' in automation_level.lower() or 'ai' in automation_level.lower():
+        # Stricter thresholds for high automation (easier to substitute)
+        if diy_count <= 3:
+            return "LOW"
+        elif diy_count <= 8:
+            return "MEDIUM"
+        else:
+            return "HIGH"
+    else:
+        # Standard thresholds for low/medium automation
+        if diy_count <= 6:
+            return "LOW"
+        elif diy_count <= 15:
+            return "MEDIUM"
+        else:
+            return "HIGH"
+
+
+def compute_content_saturation_for_solution(
+    content_results: list,
+    modality: str
+) -> str:
+    """
+    Compute content saturation relative to THIS SOLUTION (not the problem).
+    
+    CRITICAL: This is solution-specific content saturation.
+    - For SOFTWARE: blogs/articles about THIS type of solution
+    - For SERVICE: educational content about THIS service type
+    - NOT general problem-space content
+    
+    RULES (deterministic thresholds):
+    - Count content results (blogs, guides, tutorials)
+    - More content = more established solution category
+    - Thresholds vary by modality
+    
+    Args:
+        content_results: List of blog/guide search results
+        modality: Solution modality
+        
+    Returns:
+        "LOW", "MEDIUM", or "HIGH"
+    """
+    content_count = len(content_results)
+    
+    # Thresholds (modality-agnostic for simplicity)
+    if content_count <= 5:
+        return "LOW"
+    elif content_count <= 15:
+        return "MEDIUM"
+    else:
+        return "HIGH"
+
+
+def compute_solution_class_maturity(
+    commercial_products: list,
+    content_results: list,
+    modality: str
+) -> str:
+    """
+    Compute solution-class maturity relative to THIS SOLUTION.
+    
+    FACTUAL SIGNAL: Does a recognized product category exist for this solution type?
+    
+    RULES (deterministic heuristics):
+    1. NON_EXISTENT: No commercial products AND no content
+    2. EMERGING: Few commercial products OR limited content
+    3. ESTABLISHED: Many commercial products AND substantial content
+    
+    This is INDEPENDENT of problem severity or startup viability.
+    
+    Args:
+        commercial_products: List of commercial competitor dicts
+        content_results: List of content search results
+        modality: Solution modality
+        
+    Returns:
+        "NON_EXISTENT", "EMERGING", or "ESTABLISHED"
+    """
+    commercial_count = len(commercial_products)
+    content_count = len(content_results)
+    
+    # Rule 1: No products AND no content = NON_EXISTENT
+    if commercial_count == 0 and content_count <= 2:
+        return "NON_EXISTENT"
+    
+    # Rule 2: ESTABLISHED requires both products AND content
+    # Thresholds adjusted for modality
+    if modality in ["SERVICE", "PHYSICAL_PRODUCT"]:
+        # Service/physical markets establish differently (more fragmented)
+        if commercial_count >= 10 and content_count >= 10:
+            return "ESTABLISHED"
+        elif commercial_count > 0 or content_count > 2:
+            return "EMERGING"
+        else:
+            return "NON_EXISTENT"
+    else:
+        # SOFTWARE/HYBRID: stricter requirements for ESTABLISHED
+        if commercial_count >= 5 and content_count >= 8:
+            return "ESTABLISHED"
+        elif commercial_count > 0 or content_count > 2:
+            return "EMERGING"
+        else:
+            return "NON_EXISTENT"
+
+
+def compute_automation_relevance(
+    automation_level: str,
+    modality: str
+) -> str:
+    """
+    Compute automation relevance based on solution attributes.
+    
+    FACTUAL SIGNAL: How much does automation matter for this solution?
+    - HIGH automation solutions compete on efficiency/speed
+    - LOW automation solutions compete on quality/human touch
+    
+    RULES (deterministic mapping):
+    - Check automation_level keywords
+    - Adjust for modality (SERVICE/PHYSICAL_PRODUCT = lower relevance)
+    
+    Args:
+        automation_level: Automation level from user solution
+        modality: Solution modality
+        
+    Returns:
+        "LOW", "MEDIUM", or "HIGH"
+    """
+    automation_lower = automation_level.lower().strip()
+    
+    # High automation keywords
+    high_automation_keywords = ['high', 'ai', 'automated', 'ai-powered', 'automatic', 'machine learning']
+    
+    # Low automation keywords
+    low_automation_keywords = ['low', 'manual', 'human', 'person', 'handmade']
+    
+    # Check for automation level keywords
+    has_high_automation = any(kw in automation_lower for kw in high_automation_keywords)
+    has_low_automation = any(kw in automation_lower for kw in low_automation_keywords)
+    
+    # Modality adjustment: SERVICE/PHYSICAL_PRODUCT have lower automation relevance by default
+    if modality in ["SERVICE", "PHYSICAL_PRODUCT"]:
+        if has_high_automation:
+            # Even high automation matters less for service/physical
+            return "MEDIUM"
+        else:
+            # Manual service/physical products
+            return "LOW"
+    else:
+        # SOFTWARE/HYBRID: automation is more relevant
+        if has_high_automation:
+            return "HIGH"
+        elif has_low_automation:
+            return "LOW"
+        else:
+            # Medium automation or unclear
+            return "MEDIUM"
+
+
 def analyze_user_solution_competitors(solution: UserSolution):
     """
-    Detect competitors specific to the user's solution (Stage 2).
+    STAGE 2: Detect competitors and compute market strength parameters for user's solution.
     
-    This is STAGE 2 ONLY - finds competitors offering similar solutions,
-    not just addressing the same problem space (which is Stage 1).
+    This is STAGE 2 ONLY - analyzes the market for THIS SPECIFIC SOLUTION.
+    Completely separated from Stage 1 (problem analysis).
     
-    UPDATED PROCESS (with solution modality classification):
+    UPDATED PROCESS (with market strength parameters):
     1. Classify solution modality (SOFTWARE, SERVICE, PHYSICAL_PRODUCT, HYBRID)
-    2. Generate modality-aware queries (NO software terms for SERVICE/PHYSICAL_PRODUCT)
-    3. Run searches using these queries
-    4. Classify results using SAME classifier from Stage 1
-    5. Return ONLY commercial products (no blogs, Reddit, Quora, reviews)
-    6. Update output semantics based on modality
+    2. Generate modality-aware queries for competitors, DIY alternatives, and content
+    3. Run searches and classify results
+    4. Compute STRUCTURED market strength parameters (NO aggregation, NO scoring)
+    5. Return formatted output with semantic corrections
     
     CRITICAL OUTPUT SEMANTICS:
-    - For SOFTWARE modality: "exists=false" means "no software competitors"
-    - For SERVICE/PHYSICAL_PRODUCT: "exists=false" means "no SOFTWARE competitors exist"
-      (human/local/offline competition may still exist)
+    - For SOFTWARE modality: "competitors" = software competitors
+    - For SERVICE/PHYSICAL_PRODUCT: "competitors.software" = software competitors
+      (but services_expected = true indicates human/local/offline competition exists)
+    
+    MARKET STRENGTH PARAMETERS (all independent, no aggregation):
+    - competitor_density: NONE, LOW, MEDIUM, HIGH
+    - market_fragmentation: CONSOLIDATED, FRAGMENTED, MIXED
+    - substitute_pressure: LOW, MEDIUM, HIGH (DIY, manual, human services)
+    - content_saturation: LOW, MEDIUM, HIGH (relative to THIS solution)
+    - solution_class_maturity: NON_EXISTENT, EMERGING, ESTABLISHED
+    - automation_relevance: LOW, MEDIUM, HIGH
     
     CONSTRAINTS:
     - No ranking or scoring
     - No comparison to user's product
     - No LLM reasoning
-    - Strictly separated from Stage 1
+    - No strategic advice or success prediction
+    - Output is STRUCTURED FACTS only
     
     Args:
         solution: UserSolution with structured attributes
         
     Returns:
-        Dict with:
-        - solution_modality: str (SOFTWARE, SERVICE, PHYSICAL_PRODUCT, HYBRID)
-        - software_competitors_exist: bool (software competitors found)
-        - service_competitors_expected: bool (for SERVICE/PHYSICAL_PRODUCT modalities)
-        - count: int (number of commercial competitors found)
-        - products: list of commercial product dicts
-        - queries_used: list of queries
+        Dict with solution_modality, market_strength parameters, and competitors
     """
-    # Step 1: Classify solution modality BEFORE query generation
+    # ========================================================================
+    # STEP 1: Classify solution modality
+    # ========================================================================
     modality = classify_solution_modality(solution)
+    logger.info(f"Stage 2: Solution modality classified as {modality}")
     
-    # Step 2: Generate modality-aware queries
-    queries = generate_solution_class_queries(solution, modality)
+    # ========================================================================
+    # STEP 2: Generate solution-specific queries
+    # ========================================================================
+    # Generate queries for competitors (commercial products)
+    competitor_queries = generate_solution_class_queries(solution, modality)
     
-    # Step 3: Run searches
-    all_results = run_multiple_searches(queries)
+    # Generate queries for DIY alternatives/workarounds
+    # Use core_action to find DIY solutions for THIS solution
+    core_action = solution.core_action.lower().strip()
+    diy_queries = [
+        f"how to {core_action} DIY",
+        f"{core_action} tutorial",
+        f"{core_action} open source",
+        f"{core_action} script",
+    ]
     
-    # Step 4: Deduplicate results
-    unique_results = deduplicate_results(all_results)
+    # Generate queries for content (blogs, guides about THIS solution type)
+    content_queries = [
+        f"{core_action} guide",
+        f"{core_action} blog",
+        f"{core_action} best practices",
+    ]
     
-    # Step 5: Classify and filter to ONLY commercial products
+    # ========================================================================
+    # STEP 3: Run searches
+    # ========================================================================
+    competitor_results = run_multiple_searches(competitor_queries)
+    competitor_results = deduplicate_results(competitor_results)
+    
+    diy_results = run_multiple_searches(diy_queries)
+    diy_results = deduplicate_results(diy_results)
+    
+    content_results = run_multiple_searches(content_queries)
+    content_results = deduplicate_results(content_results)
+    
+    # ========================================================================
+    # STEP 4: Classify results (using Stage 1 classifier)
+    # ========================================================================
     commercial_products = []
+    diy_alternatives = []
     
-    for result in unique_results:
+    # Classify competitor results
+    for result in competitor_results:
         result_type = classify_result_type(result)
         
-        # Only include COMMERCIAL products
-        # Exclude: DIY, content (blogs/Reddit/Quora/reviews), unknown
         if result_type == 'commercial':
-            # Extract product information
+            # Commercial product - add to competitors
             product_info = {
                 'name': result.get('title', 'Unknown Product'),
                 'url': result.get('url', ''),
@@ -1984,44 +2555,118 @@ def analyze_user_solution_competitors(solution: UserSolution):
                 'snippet': result.get('snippet', ''),
             }
             commercial_products.append(product_info)
-            
             logger.debug(f"Found commercial competitor: {product_info['name']}")
-        else:
-            # Log excluded results for debugging
-            logger.debug(
-                f"Excluded from competitors (type={result_type}): "
-                f"{result.get('url', 'unknown')}"
-            )
+        elif result_type == 'diy':
+            # DIY result in competitor queries - move to DIY alternatives
+            diy_alternatives.append(result)
+        # Exclude content, unknown
     
-    # Step 6: Interpret results based on modality
-    software_competitors_exist = len(commercial_products) > 0
+    # Classify DIY results
+    for result in diy_results:
+        result_type = classify_result_type(result)
+        
+        if result_type == 'diy':
+            diy_alternatives.append(result)
+        elif result_type == 'commercial':
+            # Commercial product in DIY queries - move to competitors
+            product_info = {
+                'name': result.get('title', 'Unknown Product'),
+                'url': result.get('url', ''),
+                'pricing_model': extract_pricing_model(result),
+                'snippet': result.get('snippet', ''),
+            }
+            commercial_products.append(product_info)
+        # Exclude content, unknown
     
-    # For SERVICE or PHYSICAL_PRODUCT modalities:
-    # - software_competitors_exist = false means NO SOFTWARE competitors
-    # - service_competitors_expected = true indicates competition is human/local/offline
-    if modality in ["SERVICE", "PHYSICAL_PRODUCT"]:
-        service_competitors_expected = True
-        logger.info(
-            f"Modality is {modality}: software_competitors_exist={software_competitors_exist}, "
-            f"but service_competitors_expected=true (human/local/offline competition likely)"
-        )
-    else:
-        service_competitors_expected = False
+    # Deduplicate after reclassification
+    diy_alternatives = deduplicate_results(diy_alternatives)
     
-    count = len(commercial_products)
+    # ========================================================================
+    # STEP 5: Compute market strength parameters
+    # ========================================================================
+    # Each parameter is computed independently (no aggregation, no scoring)
     
-    logger.info(
-        f"Stage 2 ({modality} modality): Found {count} commercial competitors "
-        f"(excluded {len(unique_results) - count} non-commercial results)"
+    competitor_density = compute_competitor_density(
+        len(commercial_products),
+        modality
     )
     
+    market_fragmentation = compute_market_fragmentation(
+        commercial_products,
+        modality
+    )
+    
+    substitute_pressure = compute_substitute_pressure(
+        diy_alternatives,
+        modality,
+        solution.automation_level
+    )
+    
+    content_saturation = compute_content_saturation_for_solution(
+        content_results,
+        modality
+    )
+    
+    solution_class_maturity = compute_solution_class_maturity(
+        commercial_products,
+        content_results,
+        modality
+    )
+    
+    automation_relevance = compute_automation_relevance(
+        solution.automation_level,
+        modality
+    )
+    
+    logger.info(
+        f"Stage 2 market strength: "
+        f"density={competitor_density}, fragmentation={market_fragmentation}, "
+        f"substitutes={substitute_pressure}, content={content_saturation}, "
+        f"maturity={solution_class_maturity}, automation={automation_relevance}"
+    )
+    
+    # ========================================================================
+    # STEP 6: Format output with semantic corrections
+    # ========================================================================
+    # SEMANTIC CORRECTION for non-software solutions:
+    # "no competitors found" means "no SOFTWARE competitors found"
+    # NOT "no competition exists" (human/local/offline competition may exist)
+    
+    services_expected = modality in ["SERVICE", "PHYSICAL_PRODUCT"]
+    
+    if services_expected and len(commercial_products) == 0:
+        logger.info(
+            f"Modality is {modality}: No SOFTWARE competitors found, "
+            f"but human/local/offline competition likely exists"
+        )
+    
+    # Build competitor list (software competitors only)
+    software_competitors = [
+        {
+            'name': p['name'],
+            'url': p['url'],
+            'pricing_model': p['pricing_model']
+        }
+        for p in commercial_products[:10]  # Limit to top 10
+    ]
+    
+    # ========================================================================
+    # RETURN: Structured output matching requirement specification
+    # ========================================================================
     return {
-        'solution_modality': modality,
-        'software_competitors_exist': software_competitors_exist,
-        'service_competitors_expected': service_competitors_expected,
-        'count': count,
-        'products': commercial_products,
-        'queries_used': queries,
+        "solution_modality": modality,
+        "market_strength": {
+            "competitor_density": competitor_density,
+            "market_fragmentation": market_fragmentation,
+            "substitute_pressure": substitute_pressure,
+            "content_saturation": content_saturation,
+            "solution_class_maturity": solution_class_maturity,
+            "automation_relevance": automation_relevance,
+        },
+        "competitors": {
+            "software": software_competitors,
+            "services_expected": services_expected,
+        }
     }
 
 
