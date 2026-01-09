@@ -1584,27 +1584,199 @@ def analyze_market(data: IdeaInput):
 # STAGE 2: USER-SOLUTION COMPETITOR DETECTION
 # ============================================================================
 
-def generate_solution_class_queries(solution: UserSolution):
+def classify_solution_modality(solution: UserSolution):
     """
-    Generate deterministic search queries based on user's solution attributes.
+    Classify solution modality as SOFTWARE, SERVICE, PHYSICAL_PRODUCT, or HYBRID.
+    
+    This is a REQUIRED preprocessing step before Stage-2 query generation.
+    Modality classification MUST be:
+    - Rule-based (no ML/AI)
+    - Deterministic (same input → same output)
+    - Explainable (clear reasoning)
+    - Independent of search results
+    
+    CLASSIFICATION RULES:
+    
+    1. SOFTWARE (high automation, digital output):
+       - automation_level contains: "high", "AI", "automated", "AI-powered"
+       - AND no service-specific keywords in core_action
+    
+    2. SERVICE (low automation, human-delivered):
+       - automation_level contains: "low", "manual", "human"
+       - OR core_action contains: "repair", "maintenance", "onsite", "doorstep", 
+         "service", "install", "cleaning", "consulting", "training"
+    
+    3. PHYSICAL_PRODUCT (tangible output):
+       - output_type contains: "product", "device", "hardware", "equipment",
+         "machine", "gadget", "tool" (physical tool, not software)
+    
+    4. HYBRID (both software and service components):
+       - Has characteristics of both SOFTWARE and SERVICE
+       - E.g., "AI-powered consulting" or "automated repair scheduling"
+    
+    BIAS RULE: When uncertain, choose the LESS automated modality.
+    Precedence: SERVICE > PHYSICAL_PRODUCT > HYBRID > SOFTWARE
+    
+    Args:
+        solution: UserSolution with structured attributes
+        
+    Returns:
+        str: "SOFTWARE", "SERVICE", "PHYSICAL_PRODUCT", or "HYBRID"
+    """
+    # Normalize attributes for matching
+    automation_level = solution.automation_level.lower().strip()
+    core_action = solution.core_action.lower().strip()
+    output_type = solution.output_type.lower().strip()
+    
+    # Define keyword sets for classification
+    # SERVICE indicators (highest priority - bias toward non-software)
+    service_keywords = {
+        'repair', 'maintenance', 'onsite', 'doorstep', 'service',
+        'install', 'installation', 'cleaning', 'consulting', 'training',
+        'coaching', 'therapy', 'treatment', 'care', 'support',
+        'manual', 'handyman', 'technician', 'specialist'
+    }
+    
+    # PHYSICAL_PRODUCT indicators
+    physical_output_keywords = {
+        'product', 'device', 'hardware', 'equipment', 'machine',
+        'gadget', 'appliance', 'furniture', 'clothing', 'food',
+        'material', 'component', 'part'
+    }
+    
+    # SOFTWARE indicators (lowest priority - only when clearly software)
+    high_automation_keywords = {
+        'high', 'ai', 'automated', 'ai-powered', 'automatic',
+        'machine learning', 'ml', 'algorithm', 'intelligent'
+    }
+    
+    # LOW automation indicators (supports SERVICE)
+    low_automation_keywords = {
+        'low', 'manual', 'human', 'person', 'handmade',
+        'custom', 'bespoke', 'artisan'
+    }
+    
+    # Check for SERVICE indicators FIRST (highest priority per bias rule)
+    # Service actions take precedence over physical outputs
+    has_service_action = any(kw in core_action for kw in service_keywords)
+    has_low_automation = any(kw in automation_level for kw in low_automation_keywords)
+    
+    if has_service_action:
+        # Service action detected - check if also has high automation (HYBRID vs pure SERVICE)
+        has_high_automation = any(kw in automation_level for kw in high_automation_keywords)
+        
+        if has_high_automation:
+            # HYBRID: Service with automation components
+            logger.info(
+                f"Classified as HYBRID: Service action '{core_action}' "
+                f"with automation '{automation_level}'"
+            )
+            return "HYBRID"
+        else:
+            # Pure SERVICE
+            logger.info(
+                f"Classified as SERVICE: Service action detected "
+                f"(action='{core_action}')"
+            )
+            return "SERVICE"
+    
+    # Check for PHYSICAL_PRODUCT indicators (before low automation check)
+    # Physical products take precedence over generic low automation
+    has_physical_output = any(kw in output_type for kw in physical_output_keywords)
+    
+    if has_physical_output:
+        # Check if also has software/service components
+        has_high_automation = any(kw in automation_level for kw in high_automation_keywords)
+        
+        if has_high_automation:
+            # HYBRID: Physical product with software/service
+            logger.info(
+                f"Classified as HYBRID: Physical output '{output_type}' "
+                f"with automation components"
+            )
+            return "HYBRID"
+        else:
+            # Pure PHYSICAL_PRODUCT
+            logger.info(
+                f"Classified as PHYSICAL_PRODUCT: Tangible output "
+                f"(output='{output_type}')"
+            )
+            return "PHYSICAL_PRODUCT"
+    
+    # Check for low automation (without service action keywords)
+    if has_low_automation:
+        # Low automation without service action - still SERVICE by bias rule
+        logger.info(
+            f"Classified as SERVICE: Low automation "
+            f"(automation='{automation_level}')"
+        )
+        return "SERVICE"
+    
+    # Check for clear SOFTWARE indicators
+    has_high_automation = any(kw in automation_level for kw in high_automation_keywords)
+    
+    if has_high_automation:
+        # SOFTWARE: High automation, no service/physical indicators
+        logger.info(
+            f"Classified as SOFTWARE: High automation "
+            f"(automation='{automation_level}')"
+        )
+        return "SOFTWARE"
+    
+    # UNCERTAIN CASE: Apply bias toward less automated modality
+    # Default to SERVICE (most conservative, least software-biased)
+    logger.info(
+        f"Uncertain modality - defaulting to SERVICE (bias toward non-software). "
+        f"action='{core_action}', automation='{automation_level}', output='{output_type}'"
+    )
+    return "SERVICE"
+
+
+def generate_solution_class_queries(solution: UserSolution, modality: str):
+    """
+    Generate deterministic, modality-aware search queries.
     
     This is STAGE 2 ONLY - generates queries specific to the user's solution,
     not the problem space.
     
+    CRITICAL: Query terms MUST match solution_modality.
+    SOFTWARE-specific terms (tool, software, platform, SaaS, AI, automation)
+    MUST NEVER be used for SERVICE or PHYSICAL_PRODUCT modalities.
+    
     RULES:
     - Queries are rule-generated and deterministic
-    - Use static templates based on solution attributes
+    - Use static templates based on solution attributes AND modality
     - No free-text input, only structured attributes
     - No LLM rewriting or semantic expansion
     
-    QUERY TEMPLATES:
-    - "{automation_level} {core_action} software"
-    - "{core_action} {output_type} tool"
-    - "{target_user} {core_action} platform"
-    - "automated {core_action} service"
+    MODALITY-SPECIFIC QUERY TEMPLATES:
+    
+    SOFTWARE:
+    - "{core_action} software"
+    - "{core_action} tool"
+    - "{core_action} platform"
+    - "{automation_level} {core_action} SaaS"
+    
+    SERVICE:
+    - "{core_action} service"
+    - "{core_action} provider"
+    - "{core_action} company"
+    - "local {core_action} business"
+    
+    PHYSICAL_PRODUCT:
+    - "{output_type} manufacturer"
+    - "{output_type} supplier"
+    - "{core_action} product"
+    - "{output_type} brand"
+    
+    HYBRID:
+    - "{core_action} service"
+    - "{core_action} platform"
+    - "{core_action} provider"
     
     Args:
         solution: UserSolution with structured attributes
+        modality: "SOFTWARE", "SERVICE", "PHYSICAL_PRODUCT", or "HYBRID"
         
     Returns:
         List of search query strings (3-5 queries)
@@ -1615,21 +1787,62 @@ def generate_solution_class_queries(solution: UserSolution):
     target_user = solution.target_user.lower().strip()
     automation_level = solution.automation_level.lower().strip()
     
-    # Generate queries using fixed templates
-    # Each template focuses on a different aspect of the solution
-    queries = [
-        # Template 1: Focus on automation + action
-        f"{automation_level} {core_action} software",
-        
-        # Template 2: Focus on action + output
-        f"{core_action} {output_type} tool",
-        
-        # Template 3: Focus on target user + action
-        f"{target_user} {core_action} platform",
-        
-        # Template 4: Generic automation + action
-        f"automated {core_action} service",
-    ]
+    # Generate queries based on modality
+    # HARD RULE: SOFTWARE terms MUST NOT appear in SERVICE/PHYSICAL_PRODUCT queries
+    
+    if modality == "SOFTWARE":
+        # SOFTWARE modality: Use software-specific terms
+        queries = [
+            f"{core_action} software",
+            f"{core_action} tool",
+            f"{core_action} platform",
+            f"{automation_level} {core_action} SaaS",
+            f"{core_action} AI tool",
+        ]
+        logger.info(f"Generated SOFTWARE modality queries for '{core_action}'")
+    
+    elif modality == "SERVICE":
+        # SERVICE modality: Use service-specific terms
+        # NO software/tool/platform/SaaS terms allowed
+        queries = [
+            f"{core_action} service",
+            f"{core_action} provider",
+            f"{core_action} company",
+            f"local {core_action} business",
+            f"{core_action} near me",
+        ]
+        logger.info(f"Generated SERVICE modality queries for '{core_action}'")
+    
+    elif modality == "PHYSICAL_PRODUCT":
+        # PHYSICAL_PRODUCT modality: Use product-specific terms
+        # NO software/tool/platform/SaaS terms allowed
+        queries = [
+            f"{output_type} manufacturer",
+            f"{output_type} supplier",
+            f"{core_action} product",
+            f"{output_type} brand",
+            f"{output_type} wholesale",
+        ]
+        logger.info(f"Generated PHYSICAL_PRODUCT modality queries for '{output_type}'")
+    
+    elif modality == "HYBRID":
+        # HYBRID modality: Mix SERVICE and SOFTWARE terms carefully
+        queries = [
+            f"{core_action} service",
+            f"{core_action} platform",
+            f"{core_action} provider",
+            f"{automation_level} {core_action} service",
+        ]
+        logger.info(f"Generated HYBRID modality queries for '{core_action}'")
+    
+    else:
+        # Fallback (should never happen if classify_solution_modality is correct)
+        logger.warning(f"Unknown modality '{modality}', defaulting to SERVICE queries")
+        queries = [
+            f"{core_action} service",
+            f"{core_action} provider",
+            f"{core_action} company",
+        ]
     
     # Deduplicate queries (case-insensitive)
     seen = set()
@@ -1640,8 +1853,8 @@ def generate_solution_class_queries(solution: UserSolution):
             seen.add(normalized)
             unique_queries.append(query)
     
-    logger.info(f"Generated {len(unique_queries)} solution-class queries")
-    logger.debug(f"Solution-class queries: {unique_queries}")
+    logger.info(f"Generated {len(unique_queries)} {modality} modality queries")
+    logger.debug(f"Queries: {unique_queries}")
     
     return unique_queries
 
@@ -1688,11 +1901,18 @@ def analyze_user_solution_competitors(solution: UserSolution):
     This is STAGE 2 ONLY - finds competitors offering similar solutions,
     not just addressing the same problem space (which is Stage 1).
     
-    PROCESS:
-    1. Generate solution-class queries (deterministic, template-based)
-    2. Run searches using these queries
-    3. Classify results using SAME classifier from Stage 1
-    4. Return ONLY commercial products (no blogs, Reddit, Quora, reviews)
+    UPDATED PROCESS (with solution modality classification):
+    1. Classify solution modality (SOFTWARE, SERVICE, PHYSICAL_PRODUCT, HYBRID)
+    2. Generate modality-aware queries (NO software terms for SERVICE/PHYSICAL_PRODUCT)
+    3. Run searches using these queries
+    4. Classify results using SAME classifier from Stage 1
+    5. Return ONLY commercial products (no blogs, Reddit, Quora, reviews)
+    6. Update output semantics based on modality
+    
+    CRITICAL OUTPUT SEMANTICS:
+    - For SOFTWARE modality: "exists=false" means "no software competitors"
+    - For SERVICE/PHYSICAL_PRODUCT: "exists=false" means "no SOFTWARE competitors exist"
+      (human/local/offline competition may still exist)
     
     CONSTRAINTS:
     - No ranking or scoring
@@ -1705,20 +1925,26 @@ def analyze_user_solution_competitors(solution: UserSolution):
         
     Returns:
         Dict with:
-        - exists: bool (competitors found)
-        - count: int (number of commercial competitors)
+        - solution_modality: str (SOFTWARE, SERVICE, PHYSICAL_PRODUCT, HYBRID)
+        - software_competitors_exist: bool (software competitors found)
+        - service_competitors_expected: bool (for SERVICE/PHYSICAL_PRODUCT modalities)
+        - count: int (number of commercial competitors found)
         - products: list of commercial product dicts
+        - queries_used: list of queries
     """
-    # Step 1: Generate solution-class queries
-    queries = generate_solution_class_queries(solution)
+    # Step 1: Classify solution modality BEFORE query generation
+    modality = classify_solution_modality(solution)
     
-    # Step 2: Run searches
+    # Step 2: Generate modality-aware queries
+    queries = generate_solution_class_queries(solution, modality)
+    
+    # Step 3: Run searches
     all_results = run_multiple_searches(queries)
     
-    # Step 3: Deduplicate results
+    # Step 4: Deduplicate results
     unique_results = deduplicate_results(all_results)
     
-    # Step 4: Classify and filter to ONLY commercial products
+    # Step 5: Classify and filter to ONLY commercial products
     commercial_products = []
     
     for result in unique_results:
@@ -1744,20 +1970,37 @@ def analyze_user_solution_competitors(solution: UserSolution):
                 f"{result.get('url', 'unknown')}"
             )
     
-    exists = len(commercial_products) > 0
+    # Step 6: Interpret results based on modality
+    software_competitors_exist = len(commercial_products) > 0
+    
+    # For SERVICE or PHYSICAL_PRODUCT modalities:
+    # - software_competitors_exist = false means NO SOFTWARE competitors
+    # - service_competitors_expected = true indicates competition is human/local/offline
+    if modality in ["SERVICE", "PHYSICAL_PRODUCT"]:
+        service_competitors_expected = True
+        logger.info(
+            f"Modality is {modality}: software_competitors_exist={software_competitors_exist}, "
+            f"but service_competitors_expected=true (human/local/offline competition likely)"
+        )
+    else:
+        service_competitors_expected = False
+    
     count = len(commercial_products)
     
     logger.info(
-        f"Stage 2: Found {count} commercial competitors for user solution "
+        f"Stage 2 ({modality} modality): Found {count} commercial competitors "
         f"(excluded {len(unique_results) - count} non-commercial results)"
     )
     
     return {
-        'exists': exists,
+        'solution_modality': modality,
+        'software_competitors_exist': software_competitors_exist,
+        'service_competitors_expected': service_competitors_expected,
         'count': count,
         'products': commercial_products,
         'queries_used': queries,
     }
+
 
 
 @app.post("/analyze-user-solution")
