@@ -1001,82 +1001,6 @@ def classify_result_type(result):
         logger.debug(f"  → Reasoning: Content sites discuss products but don't sell them")
         return 'content'
     
-    # ========================================================================
-    # STEP 1A: CHECK for DOCUMENTATION pages (CRITICAL FIX)
-    # ========================================================================
-    # Documentation pages explain HOW TO USE a product, they don't SELL it
-    # This MUST be checked BEFORE commercial signals to prevent misclassification
-    # 
-    # INVARIANT: Documentation ≠ Commercial Competitor
-    # 
-    # Detection rules:
-    # 1. URL contains documentation path segments (docs/, documentation/, support/, help/)
-    # 2. Title/snippet contains documentation keywords (documentation, tutorial, guide, introduction)
-    # 3. If BOTH URL and content indicate docs → CONTENT (not commercial)
-    
-    # Check URL for documentation path segments
-    url_lower = url.lower()
-    is_docs_url = any([
-        '/docs/' in url_lower,
-        '/doc/' in url_lower,
-        '/documentation/' in url_lower,
-        '/support/' in url_lower,
-        '/help/' in url_lower,
-        '/api/' in url_lower,
-        '/reference/' in url_lower,
-        '/manual/' in url_lower,
-        url_lower.startswith('docs.'),
-        url_lower.startswith('documentation.'),
-        url_lower.startswith('support.'),
-        url_lower.startswith('help.'),
-    ])
-    
-    # Check title/snippet for documentation indicators
-    documentation_keywords = [
-        'documentation',
-        'docs',
-        'tutorial',
-        'introduction to',
-        'getting started',
-        'user guide',
-        'reference guide',
-        'api reference',
-        'how to use',
-        'learn how to',
-        'introductory guide',
-    ]
-    
-    has_docs_keywords = any(keyword in text for keyword in documentation_keywords)
-    
-    # RULE: If URL suggests docs AND content mentions documentation → CONTENT
-    # This catches pages like docs.oracle.com, support.atlassian.com/jira/docs/, etc.
-    if is_docs_url and has_docs_keywords:
-        logger.debug(f"STEP 1A RESULT: CONTENT (documentation page)")
-        logger.debug(f"  → URL: {url}")
-        logger.debug(f"  → Reasoning: Documentation pages explain products, don't sell them")
-        logger.debug(f"  → URL indicates docs: {is_docs_url}")
-        logger.debug(f"  → Content has doc keywords: {has_docs_keywords}")
-        return 'content'
-    
-    # RULE: Even if URL doesn't suggest docs, strong documentation patterns → CONTENT
-    # This catches standalone tutorials, introductory guides, etc.
-    strong_docs_patterns = [
-        'documentation',
-        'tutorial',
-        'introduction to',
-        'introductory guide',
-        'getting started guide',
-        'user guide',
-        'reference guide',
-    ]
-    
-    has_strong_docs_pattern = any(pattern in text for pattern in strong_docs_patterns)
-    if has_strong_docs_pattern:
-        logger.debug(f"STEP 1A RESULT: CONTENT (strong documentation pattern)")
-        logger.debug(f"  → URL: {url}")
-        logger.debug(f"  → Reasoning: Strong documentation/tutorial indicators")
-        return 'content'
-    
     # Check for strong informational patterns that prove this is content
     # These patterns indicate the page is TALKING ABOUT products, not SELLING one
     informational_patterns = {
@@ -1087,9 +1011,7 @@ def classify_result_type(result):
         # List/roundup patterns - aggregating multiple solutions
         'list': ['best tool', 'best software', 'best app', 'best product', 
                  'top tool', 'top software', 'top app', 'top product',
-                 'best crm', 'best platform', 'best solution', 'best service',
-                 # Note: "best automation" needed because "best tool" doesn't match "best automation tools"
-                 'best automation', 'top automation'],
+                 'best crm', 'best platform', 'best solution', 'best service'],
         'roundup': ['roundup', 'listicle', 'alternatives to', 'list of'],
         
         # Educational content patterns - teaching, not selling
