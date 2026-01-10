@@ -48,6 +48,9 @@ def validate_leverage_inputs(
     delivers_final_answer: bool,
     unique_data_access: bool,
     works_under_constraints: bool,
+    has_pricing_delta: bool,
+    has_infrastructure_shift: bool,
+    has_distribution_shift: bool,
     # Market inputs (from Stage 2)
     automation_relevance: str,
     substitute_pressure: str,
@@ -98,6 +101,15 @@ def validate_leverage_inputs(
     if not isinstance(works_under_constraints, bool):
         errors.append(f"works_under_constraints must be boolean, got {type(works_under_constraints).__name__}")
     
+    if not isinstance(has_pricing_delta, bool):
+        errors.append(f"has_pricing_delta must be boolean, got {type(has_pricing_delta).__name__}")
+    
+    if not isinstance(has_infrastructure_shift, bool):
+        errors.append(f"has_infrastructure_shift must be boolean, got {type(has_infrastructure_shift).__name__}")
+    
+    if not isinstance(has_distribution_shift, bool):
+        errors.append(f"has_distribution_shift must be boolean, got {type(has_distribution_shift).__name__}")
+    
     # TYPE VALIDATION: Market inputs (enum values)
     valid_levels = {"LOW", "MEDIUM", "HIGH"}
     
@@ -135,35 +147,59 @@ def validate_leverage_inputs(
 # ============================================================================
 
 def detect_cost_leverage(
-    replaces_human_labor: bool,
-    automation_relevance: str
+    has_pricing_delta: bool,
+    has_infrastructure_shift: bool,
+    has_distribution_shift: bool
 ) -> bool:
     """
     RULE 1: COST_LEVERAGE
     
-    Trigger if:
-    - replaces_human_labor == True
-    AND
-    - automation_relevance == HIGH
+    Trigger if AT LEAST ONE of the following is explicitly true:
+    - has_pricing_delta == True (e.g., "10x cheaper", "free vs paid", dramatic price difference)
+    - has_infrastructure_shift == True (e.g., operational model that lowers costs across any domain)
+    - has_distribution_shift == True (e.g., channel that reduces customer acquisition costs)
     
     REASONING:
-    Cost leverage comes from replacing expensive human labor with automation.
-    Only triggers when automation is HIGHLY relevant to the solution.
+    Cost leverage comes from a measurable cost advantage through one of three mechanisms:
+    1. Pricing delta: Direct price advantage (10x cheaper, free tier, dramatically lower pricing)
+       - SOFTWARE: Free tier vs paid competitors, $5/month vs $50/month
+       - SERVICE: $20/hour vs $100/hour industry rate
+       - PRODUCT: $50 vs $200 competitors through manufacturing efficiency
+    
+    2. Infrastructure shift: Lower operational costs through different architecture/operations
+       - SOFTWARE: Serverless eliminating server costs, AI replacing human ops
+       - SERVICE: Remote delivery eliminating travel costs, platform vs individual contractors
+       - PRODUCT: Drop-shipping vs warehousing, 3D printing vs traditional manufacturing
+    
+    3. Distribution shift: Lower customer acquisition costs through unique channel
+       - SOFTWARE: Embedded in platform (Slack, Teams), viral mechanisms
+       - SERVICE: Local network effects, exclusive provider networks
+       - PRODUCT: Direct-to-consumer subscription vs retail markup
+    
+    Automation or replacing human labor ALONE does NOT imply cost leverage.
+    There must be an explicit advantage signal applicable to the solution's domain.
     
     Args:
-        replaces_human_labor: Does solution replace human labor?
-        automation_relevance: How relevant is automation? (LOW/MEDIUM/HIGH)
+        has_pricing_delta: Does solution have significant pricing advantage?
+        has_infrastructure_shift: Does solution use fundamentally different infrastructure/operations?
+        has_distribution_shift: Does solution use unique distribution channel?
         
     Returns:
         True if COST_LEVERAGE should be flagged, False otherwise
     """
-    result = replaces_human_labor and automation_relevance == "HIGH"
+    result = has_pricing_delta or has_infrastructure_shift or has_distribution_shift
     
     if result:
+        signals = []
+        if has_pricing_delta:
+            signals.append("pricing_delta")
+        if has_infrastructure_shift:
+            signals.append("infrastructure_shift")
+        if has_distribution_shift:
+            signals.append("distribution_shift")
+        
         logger.info(
-            "COST_LEVERAGE detected: "
-            f"replaces_human_labor={replaces_human_labor}, "
-            f"automation_relevance={automation_relevance}"
+            f"COST_LEVERAGE detected with signals: {', '.join(signals)}"
         )
     
     return result
@@ -329,6 +365,9 @@ def detect_leverage_flags(
     delivers_final_answer: bool,
     unique_data_access: bool,
     works_under_constraints: bool,
+    has_pricing_delta: bool,
+    has_infrastructure_shift: bool,
+    has_distribution_shift: bool,
     # Market inputs (from Stage 2)
     automation_relevance: str,
     substitute_pressure: str,
@@ -359,6 +398,9 @@ def detect_leverage_flags(
             delivers_final_answer: Does solution deliver final answer?
             unique_data_access: Does solution have unique data access?
             works_under_constraints: Does solution work under constraints?
+            has_pricing_delta: Does solution have significant pricing advantage?
+            has_infrastructure_shift: Does solution use fundamentally different infrastructure?
+            has_distribution_shift: Does solution use unique distribution channel?
         
         Market inputs (from Stage 2):
             automation_relevance: How relevant is automation? (LOW/MEDIUM/HIGH)
@@ -382,6 +424,9 @@ def detect_leverage_flags(
         delivers_final_answer=delivers_final_answer,
         unique_data_access=unique_data_access,
         works_under_constraints=works_under_constraints,
+        has_pricing_delta=has_pricing_delta,
+        has_infrastructure_shift=has_infrastructure_shift,
+        has_distribution_shift=has_distribution_shift,
         automation_relevance=automation_relevance,
         substitute_pressure=substitute_pressure,
         content_saturation=content_saturation
@@ -407,11 +452,21 @@ def detect_leverage_flags(
     leverage_details = {}
     
     # Rule 1: COST_LEVERAGE
-    if detect_cost_leverage(replaces_human_labor, automation_relevance):
+    if detect_cost_leverage(has_pricing_delta, has_infrastructure_shift, has_distribution_shift):
         leverage_flags.append("COST_LEVERAGE")
+        
+        # Build detailed reason based on which signals are present
+        signals = []
+        if has_pricing_delta:
+            signals.append("pricing advantage exists")
+        if has_infrastructure_shift:
+            signals.append("infrastructure shift exists")
+        if has_distribution_shift:
+            signals.append("distribution shift exists")
+        
         leverage_details["COST_LEVERAGE"] = {
             "triggered": True,
-            "reason": "Replaces human labor with high automation relevance"
+            "reason": f"Cost advantage detected: {', '.join(signals)}"
         }
     
     # Rule 2: TIME_LEVERAGE

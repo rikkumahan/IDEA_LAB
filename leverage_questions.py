@@ -128,6 +128,69 @@ CANONICAL_QUESTIONS = {
             False: "Standard web application with no special constraints"
         },
         "sanity_check": None
+    },
+    
+    "has_pricing_delta": {
+        "id": "has_pricing_delta",
+        "canonical_wording": (
+            "Does your solution have a significant pricing advantage over existing alternatives? "
+            "(e.g., 10x cheaper, free vs paid, dramatically lower cost structure)"
+        ),
+        "semantic_meaning": (
+            "Determine if the solution has an explicit cost advantage through pricing. "
+            "This must be a measurable pricing difference, not just 'cheaper' but "
+            "significantly cheaper (e.g., 10x reduction, free tier, or fundamentally different pricing model). "
+            "Applies across all domains: software pricing, service rates, or product costs."
+        ),
+        "answer_type": "boolean",
+        "examples": {
+            True: "SOFTWARE: Free tier where competitors charge $50/month | SERVICE: $20/hour vs $100/hour industry rate | PRODUCT: $50 retail vs $200 competitors",
+            False: "Similar pricing to competitors, or slightly cheaper (e.g., 10-20% less)"
+        },
+        "sanity_check": None
+    },
+    
+    "has_infrastructure_shift": {
+        "id": "has_infrastructure_shift",
+        "canonical_wording": (
+            "Does your solution use fundamentally different infrastructure or operations than existing alternatives? "
+            "(e.g., SOFTWARE: serverless vs self-hosted | SERVICE: remote vs on-site | PRODUCT: direct-to-consumer vs retail)"
+        ),
+        "semantic_meaning": (
+            "Determine if the solution leverages an infrastructure or operational shift that creates cost advantages. "
+            "This must be a fundamental architectural or operational difference, not just using newer technology. "
+            "SOFTWARE: serverless eliminating server costs, AI replacing human ops teams. "
+            "SERVICE: remote delivery eliminating travel costs, platform model vs individual contractors. "
+            "PRODUCT: drop-shipping vs warehousing, 3D printing vs traditional manufacturing."
+        ),
+        "answer_type": "boolean",
+        "examples": {
+            True: "SOFTWARE: Serverless where competitors use dedicated servers | SERVICE: Remote-first where competitors travel on-site | PRODUCT: 3D-printed on-demand vs mass manufacturing",
+            False: "Uses similar infrastructure/operations as competitors"
+        },
+        "sanity_check": None
+    },
+    
+    "has_distribution_shift": {
+        "id": "has_distribution_shift",
+        "canonical_wording": (
+            "Does your solution use a distribution channel that competitors cannot easily access? "
+            "(e.g., SOFTWARE: platform integration | SERVICE: network effect | PRODUCT: direct-to-consumer)"
+        ),
+        "semantic_meaning": (
+            "Determine if the solution has distribution leverage through a channel "
+            "that is unavailable or difficult for incumbents to replicate. "
+            "This must be a true distribution advantage, not just 'different marketing'. "
+            "SOFTWARE: embedded in existing platforms, viral mechanisms. "
+            "SERVICE: local networks, word-of-mouth in tight communities. "
+            "PRODUCT: subscription boxes, direct-from-manufacturer, exclusive retail partnerships."
+        ),
+        "answer_type": "boolean",
+        "examples": {
+            True: "SOFTWARE: Embedded in Slack where competitors are standalone | SERVICE: Exclusive network of certified providers | PRODUCT: Direct-to-consumer subscription where competitors use retail",
+            False: "Standard distribution channels available to all (e.g., website, ads, retail stores)"
+        },
+        "sanity_check": None
     }
 }
 
@@ -509,5 +572,8 @@ def format_for_stage3(validated_inputs: Dict[str, Any]) -> Dict[str, Any]:
         "step_reduction_ratio": validated_inputs["step_reduction_ratio"],
         "delivers_final_answer": validated_inputs["delivers_final_answer"],
         "unique_data_access": validated_inputs["unique_data_access"],
-        "works_under_constraints": validated_inputs["works_under_constraints"]
+        "works_under_constraints": validated_inputs["works_under_constraints"],
+        "has_pricing_delta": validated_inputs["has_pricing_delta"],
+        "has_infrastructure_shift": validated_inputs["has_infrastructure_shift"],
+        "has_distribution_shift": validated_inputs["has_distribution_shift"]
     }
