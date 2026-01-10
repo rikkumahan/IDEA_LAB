@@ -1,6 +1,7 @@
 import os
 import requests
 import logging
+from typing import Dict, Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -2963,6 +2964,138 @@ def analyze_user_solution(solution: UserSolution):
         'user_solution_competitors': competitors
     }
 
+# ============================================================================
+# STAGE 3: LEVERAGE REALITY ENGINE (NEW)
+# ============================================================================
+# Import Stage 3, Questioning Layer, Validation, and Explanation modules
+from stage3_leverage import compute_leverage_reality
+from questioning_layer import collect_leverage_inputs
+from validation import compute_validation_state
+from explanation_layer import generate_explanation as generate_explanation_layer
+
+# Define input model for Stage 3
+class LeverageInput(BaseModel):
+    """User leverage inputs (structured only - no free text)"""
+    replaces_human_labor: bool
+    step_reduction_ratio: int
+    delivers_final_answer: bool
+    unique_data_access: bool
+    works_under_constraints: bool
+
+
+@app.post("/complete-validation")
+def complete_validation(
+    problem_data: IdeaInput,
+    solution_data: UserSolution,
+    leverage_data: LeverageInput
+):
+    """
+    Complete 4-stage validation endpoint.
+    
+    This endpoint runs all 4 stages:
+    1. Stage 1: Problem Reality (existing analyze_idea)
+    2. Stage 2: Market Reality (existing analyze_user_solution_competitors)
+    3. Stage 3: Leverage Reality (NEW - deterministic leverage engine)
+    4. Stage 4: Validation + Explanation (NEW - combines all stages)
+    
+    Args:
+        problem_data: Problem statement and user info (Stage 1 input)
+        solution_data: Solution attributes (Stage 2 input)
+        leverage_data: Leverage inputs (Stage 3 input)
+        
+    Returns:
+        Complete validation output with explanation
+    """
+    # Stage 1: Problem Reality
+    logger.info("Running Stage 1: Problem Reality")
+    stage1_result = analyze_idea(problem_data)
+    stage1_problem_reality = {
+        "problem_level": stage1_result["problem_level"],
+        "raw_signals": stage1_result["raw_signals"],
+        "normalized_signals": stage1_result["normalized_signals"]
+    }
+    
+    # Stage 2: Market Reality
+    logger.info("Running Stage 2: Market Reality")
+    stage2_result = analyze_user_solution_competitors(solution_data)
+    stage2_market_reality = stage2_result["user_solution_competitors"]["market_strength"]
+    
+    # Stage 3: Leverage Reality (NEW)
+    logger.info("Running Stage 3: Leverage Reality")
+    user_leverage_inputs = {
+        "replaces_human_labor": leverage_data.replaces_human_labor,
+        "step_reduction_ratio": leverage_data.step_reduction_ratio,
+        "delivers_final_answer": leverage_data.delivers_final_answer,
+        "unique_data_access": leverage_data.unique_data_access,
+        "works_under_constraints": leverage_data.works_under_constraints
+    }
+    
+    stage3_leverage_reality = compute_leverage_reality(
+        stage2_market_reality,
+        user_leverage_inputs
+    )
+    
+    # Stage 4: Validation (NEW)
+    logger.info("Running Stage 4: Validation")
+    validation_output = compute_validation_state(
+        stage1_problem_reality,
+        stage2_market_reality,
+        stage3_leverage_reality
+    )
+    
+    # Generate explanation (NEW)
+    logger.info("Generating explanation")
+    explanation = generate_explanation_layer(validation_output, use_llm=False)
+    
+    # Return complete output
+    return {
+        "stage1_problem_reality": stage1_problem_reality,
+        "stage2_market_reality": stage2_market_reality,
+        "stage3_leverage_reality": stage3_leverage_reality,
+        "validation_state": validation_output["validation_state"],
+        "explanation": explanation
+    }
+
+
+@app.post("/leverage-analysis")
+def leverage_analysis(
+    market_strength: Dict[str, str],
+    leverage_inputs: LeverageInput
+):
+    """
+    Stage 3 standalone endpoint: Compute leverage flags.
+    
+    This endpoint runs ONLY Stage 3 (leverage determination).
+    It is deterministic and works identically with LLM ON/OFF.
+    
+    Args:
+        market_strength: Dict with automation_relevance, substitute_pressure, content_saturation
+        leverage_inputs: Structured leverage inputs (boolean/integer only)
+        
+    Returns:
+        Leverage reality with flags
+    """
+    user_leverage_inputs = {
+        "replaces_human_labor": leverage_inputs.replaces_human_labor,
+        "step_reduction_ratio": leverage_inputs.step_reduction_ratio,
+        "delivers_final_answer": leverage_inputs.delivers_final_answer,
+        "unique_data_access": leverage_inputs.unique_data_access,
+        "works_under_constraints": leverage_inputs.works_under_constraints
+    }
+    
+    leverage_reality = compute_leverage_reality(
+        market_strength,
+        user_leverage_inputs
+    )
+    
+    return {
+        "leverage_reality": leverage_reality
+    }
+
+
+# ============================================================================
+# LEGACY EXPLANATION FUNCTION (Keep for backward compatibility)
+# ============================================================================
 import os
 from llm_stub import StubLLMClient
 
@@ -2975,6 +3108,7 @@ def get_llm_client():
 from llm_factory import get_llm_client
 
 def generate_explanation(stage1, stage2, stage3, validation):
+    """Legacy explanation function (deprecated - use explanation_layer module)"""
     llm = get_llm_client()
     return llm.explain({
         "stage_1_problem": stage1,
