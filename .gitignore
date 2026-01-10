@@ -25,3 +25,7 @@ nltk_data/
 build/
 dist/
 *.egg-info/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
