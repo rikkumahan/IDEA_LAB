@@ -1,8 +1,9 @@
 import os
 import requests
 import logging
-from typing import Dict, List, Any
-from fastapi import FastAPI
+from typing import Dict, List, Any, Optional
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from urllib.parse import urlparse, urlunparse, parse_qs, quote
@@ -16,11 +17,168 @@ load_dotenv()
 
 app = FastAPI()
 
+# Enable CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify exact origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # This defines what data we expect from the user
 class IdeaInput(BaseModel):
     problem: str
     target_user: str
     user_claimed_frequency: str
+
+
+# ============================================================================
+# LLM-ASSISTED INTAKE LAYER (NEW)
+# ============================================================================
+
+from intake_manager import start_intake, process_answer, get_complete_data, get_session
+
+
+class IntakeStartRequest(BaseModel):
+    """Request to start intake session."""
+    initial_text: Optional[str] = None
+
+
+class IntakeRespondRequest(BaseModel):
+    """Request to respond to intake question."""
+    session_id: str
+    answer: str
+
+
+class AnalyzeRequest(BaseModel):
+    """Request to analyze complete intake data."""
+    session_id: str
+
+
+@app.post("/intake/start")
+def intake_start(request: IntakeStartRequest):
+    """
+    Start a new intake session.
+    
+    Accepts optional raw user text (startup idea or problem).
+    Returns the first structured question.
+    
+    Args:
+        request: IntakeStartRequest with optional initial_text
+        
+    Returns:
+        {
+            "session_id": str,
+            "question": str,
+            "field": str,
+            "type": str
+        }
+    """
+    logger.info("=== /intake/start called ===")
+    if request.initial_text:
+        logger.info(f"Initial text provided: {request.initial_text[:100]}...")
+    
+    result = start_intake(request.initial_text)
+    logger.info(f"Started session: {result['session_id']}")
+    return result
+
+
+@app.post("/intake/respond")
+def intake_respond(request: IntakeRespondRequest):
+    """
+    Accept answer to the last question.
+    
+    Validates answer against expected field.
+    Advances to next question or signals completion.
+    
+    Args:
+        request: IntakeRespondRequest with session_id and answer
+        
+    Returns:
+        {
+            "question": str (if not complete),
+            "field": str (if not complete),
+            "type": str (if not complete),
+            "complete": bool,
+            "data": dict (if complete),
+            "error": str (if validation fails)
+        }
+    """
+    logger.info(f"=== /intake/respond called for session {request.session_id} ===")
+    logger.info(f"Answer: {request.answer[:100] if len(request.answer) > 100 else request.answer}")
+    
+    result = process_answer(request.session_id, request.answer)
+    
+    if "error" in result:
+        logger.warning(f"Validation error: {result['error']}")
+        if result.get("retry"):
+            # Return error but allow retry
+            return result
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+    
+    if result.get("complete"):
+        logger.info("Intake complete!")
+    else:
+        logger.info(f"Next field: {result.get('field')}")
+    
+    return result
+
+
+@app.post("/analyze")
+def analyze_complete(request: AnalyzeRequest):
+    """
+    Accept fully completed schema and run deterministic Stage 1-3 pipeline.
+    
+    Returns validation_result + explanation.
+    
+    Args:
+        request: AnalyzeRequest with session_id
+        
+    Returns:
+        Complete validation output with all stages
+    """
+    logger.info(f"=== /analyze called for session {request.session_id} ===")
+    
+    # Get complete data
+    data = get_complete_data(request.session_id)
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="Session not found or not complete"
+        )
+    
+    logger.info("Retrieved complete intake data")
+    
+    # Extract sections
+    problem_input = IdeaInput(**data["problem_input"])
+    solution_input = UserSolution(**data["solution_input"])
+    
+    # Build leverage input
+    leverage_data = data["leverage_input"]
+    leverage_input_data = {
+        "replaces_human_labor": leverage_data["replaces_human_labor"],
+        "step_reduction_ratio": int(leverage_data["step_reduction_ratio"]),
+        "delivers_final_answer": leverage_data["delivers_final_answer"],
+        "unique_data_access": leverage_data["unique_data_access"],
+        "works_under_constraints": leverage_data["works_under_constraints"],
+        # Add default values for fields not collected in intake
+        "has_pricing_delta": False,
+        "has_infrastructure_shift": False,
+        "has_distribution_shift": False
+    }
+    leverage_input = LeverageInput(**leverage_input_data)
+    
+    # Run complete validation
+    result = validate_complete_idea(
+        problem_input=problem_input,
+        solution_input=solution_input,
+        leverage_input=leverage_input
+    )
+    
+    logger.info("Analysis complete")
+    return result
 
 
 # ============================================================================
