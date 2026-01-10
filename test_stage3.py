@@ -33,31 +33,44 @@ def test_cost_leverage_rule():
     print("TEST: COST_LEVERAGE Rule")
     print("=" * 70)
     
-    # Test case 1: Should trigger (replaces labor + HIGH automation)
-    print("\n1. replaces_human_labor=True, automation_relevance=HIGH")
+    # Test case 1: Should trigger (pricing delta exists)
+    print("\n1. has_pricing_delta=True")
     result = detect_cost_leverage(
-        replaces_human_labor=True,
-        automation_relevance="HIGH"
+        has_pricing_delta=True,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False
     )
-    assert result is True, "Should detect COST_LEVERAGE"
+    assert result is True, "Should detect COST_LEVERAGE with pricing delta"
     print("   ✓ COST_LEVERAGE detected correctly")
     
-    # Test case 2: Should NOT trigger (replaces labor but LOW automation)
-    print("\n2. replaces_human_labor=True, automation_relevance=LOW")
+    # Test case 2: Should trigger (infrastructure shift exists)
+    print("\n2. has_infrastructure_shift=True")
     result = detect_cost_leverage(
-        replaces_human_labor=True,
-        automation_relevance="LOW"
+        has_pricing_delta=False,
+        has_infrastructure_shift=True,
+        has_distribution_shift=False
     )
-    assert result is False, "Should NOT detect COST_LEVERAGE (automation not HIGH)"
-    print("   ✓ COST_LEVERAGE correctly not detected")
+    assert result is True, "Should detect COST_LEVERAGE with infrastructure shift"
+    print("   ✓ COST_LEVERAGE detected correctly")
     
-    # Test case 3: Should NOT trigger (no labor replacement)
-    print("\n3. replaces_human_labor=False, automation_relevance=HIGH")
+    # Test case 3: Should trigger (distribution shift exists)
+    print("\n3. has_distribution_shift=True")
     result = detect_cost_leverage(
-        replaces_human_labor=False,
-        automation_relevance="HIGH"
+        has_pricing_delta=False,
+        has_infrastructure_shift=False,
+        has_distribution_shift=True
     )
-    assert result is False, "Should NOT detect COST_LEVERAGE (no labor replacement)"
+    assert result is True, "Should detect COST_LEVERAGE with distribution shift"
+    print("   ✓ COST_LEVERAGE detected correctly")
+    
+    # Test case 4: Should NOT trigger (no explicit signals)
+    print("\n4. All signals = False")
+    result = detect_cost_leverage(
+        has_pricing_delta=False,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False
+    )
+    assert result is False, "Should NOT detect COST_LEVERAGE without explicit signals"
     print("   ✓ COST_LEVERAGE correctly not detected")
     
     print("\n✓ COST_LEVERAGE rule tests passed")
@@ -194,6 +207,9 @@ def test_input_validation():
         delivers_final_answer=False,
         unique_data_access=True,
         works_under_constraints=False,
+        has_pricing_delta=True,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False,
         automation_relevance="HIGH",
         substitute_pressure="MEDIUM",
         content_saturation="LOW"
@@ -210,6 +226,9 @@ def test_input_validation():
         delivers_final_answer=False,
         unique_data_access=True,
         works_under_constraints=False,
+        has_pricing_delta=True,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False,
         automation_relevance="HIGH",
         substitute_pressure="MEDIUM",
         content_saturation="LOW"
@@ -226,6 +245,9 @@ def test_input_validation():
         delivers_final_answer=False,
         unique_data_access=True,
         works_under_constraints=False,
+        has_pricing_delta=True,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False,
         automation_relevance="HIGH",
         substitute_pressure="MEDIUM",
         content_saturation="LOW"
@@ -241,6 +263,9 @@ def test_input_validation():
         delivers_final_answer=False,
         unique_data_access=False,
         works_under_constraints=False,
+        has_pricing_delta=False,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False,
         automation_relevance="HIGH",  # But HIGH automation (suspicious)
         substitute_pressure="MEDIUM",
         content_saturation="LOW"
@@ -265,6 +290,9 @@ def test_multiple_leverage_flags():
         delivers_final_answer=True,
         unique_data_access=True,
         works_under_constraints=True,
+        has_pricing_delta=True,  # Added for COST_LEVERAGE
+        has_infrastructure_shift=True,  # Added for COST_LEVERAGE
+        has_distribution_shift=False,
         automation_relevance="HIGH",
         substitute_pressure="HIGH",
         content_saturation="HIGH"
@@ -290,6 +318,9 @@ def test_multiple_leverage_flags():
         delivers_final_answer=False,
         unique_data_access=False,
         works_under_constraints=False,
+        has_pricing_delta=False,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False,
         automation_relevance="LOW",
         substitute_pressure="LOW",
         content_saturation="LOW"
@@ -317,6 +348,9 @@ def test_determinism():
             "delivers_final_answer": True,
             "unique_data_access": False,
             "works_under_constraints": False,
+            "has_pricing_delta": True,
+            "has_infrastructure_shift": False,
+            "has_distribution_shift": False,
             "automation_relevance": "HIGH",
             "substitute_pressure": "MEDIUM",
             "content_saturation": "MEDIUM"
@@ -327,6 +361,9 @@ def test_determinism():
             "delivers_final_answer": False,
             "unique_data_access": True,
             "works_under_constraints": True,
+            "has_pricing_delta": False,
+            "has_infrastructure_shift": False,
+            "has_distribution_shift": False,
             "automation_relevance": "LOW",
             "substitute_pressure": "LOW",
             "content_saturation": "LOW"
@@ -361,6 +398,9 @@ def test_edge_cases():
         delivers_final_answer=False,
         unique_data_access=False,
         works_under_constraints=False,
+        has_pricing_delta=False,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False,
         automation_relevance="LOW",
         substitute_pressure="LOW",
         content_saturation="LOW"
@@ -376,6 +416,9 @@ def test_edge_cases():
         delivers_final_answer=False,
         unique_data_access=False,
         works_under_constraints=False,
+        has_pricing_delta=False,
+        has_infrastructure_shift=False,
+        has_distribution_shift=False,
         automation_relevance="LOW",
         substitute_pressure="LOW",
         content_saturation="LOW"
@@ -391,16 +434,20 @@ def test_edge_cases():
         delivers_final_answer=True,
         unique_data_access=True,
         works_under_constraints=True,
+        has_pricing_delta=True,  # Cost leverage still triggers with explicit signal
+        has_infrastructure_shift=False,
+        has_distribution_shift=False,
         automation_relevance="LOW",
         substitute_pressure="LOW",
         content_saturation="LOW"
     )
-    # Should detect only ACCESS and CONSTRAINT (not market-dependent)
+    # Should detect COST (explicit signal), ACCESS and CONSTRAINT (not market-dependent)
     leverage_flags = result["leverage_flags"]
     print(f"   Detected leverage: {leverage_flags}")
+    assert "COST_LEVERAGE" in leverage_flags  # Now triggers with explicit pricing delta
     assert "ACCESS_LEVERAGE" in leverage_flags
     assert "CONSTRAINT_LEVERAGE" in leverage_flags
-    assert "COST_LEVERAGE" not in leverage_flags  # Requires HIGH automation
+    assert "TIME_LEVERAGE" not in leverage_flags  # Requires step reduction or HIGH automation
     assert "COGNITIVE_LEVERAGE" not in leverage_flags  # Requires MEDIUM+ content
     print("   ✓ Market-independent leverage detected, market-dependent not detected")
     
