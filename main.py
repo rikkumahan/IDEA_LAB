@@ -682,6 +682,110 @@ def deduplicate_results(results):
 
     return unique_results
 
+
+def extract_canonical_domain(url):
+    """
+    Extract canonical domain from URL for competitor deduplication.
+    
+    ISSUE 1 FIX: Use canonical domain as unique key for competitors.
+    This prevents the same competitor from appearing multiple times
+    (e.g., ValidatorAI from different pages/paths).
+    
+    Rules:
+    - Extract domain without www prefix
+    - Lowercase for case-insensitive comparison
+    - Remove port if present
+    - Return None for invalid URLs
+    
+    Examples:
+    - "https://www.validatorai.com/pricing" → "validatorai.com"
+    - "https://ValidatorAI.com/about" → "validatorai.com"
+    - "http://www.example.com:8080/path" → "example.com"
+    
+    Args:
+        url: URL string
+        
+    Returns:
+        Canonical domain string, or None if invalid
+    """
+    if not url or not isinstance(url, str):
+        return None
+    
+    try:
+        parsed = urlparse(url.strip())
+        
+        if not parsed.netloc:
+            return None
+        
+        # Extract domain (netloc might include port)
+        domain = parsed.netloc.lower()
+        
+        # Remove port if present
+        if ':' in domain:
+            domain = domain.split(':')[0]
+        
+        # Remove www prefix for canonical form
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        
+        return domain
+    except Exception as e:
+        logger.debug(f"Failed to extract domain from URL '{url}': {e}")
+        return None
+
+
+def deduplicate_competitors_by_domain(competitors):
+    """
+    ISSUE 1 FIX: Deduplicate competitors using canonical domain as unique key.
+    
+    This prevents the same competitor from appearing multiple times in the list
+    (e.g., ValidatorAI appearing twice from different pages).
+    
+    CRITICAL: This MUST be called BEFORE:
+    - competitor_density calculation
+    - market_fragmentation inference
+    
+    Args:
+        competitors: List of competitor dicts with 'url' and other fields
+        
+    Returns:
+        List of unique competitors (first occurrence kept per domain)
+    """
+    seen_domains = set()
+    unique_competitors = []
+    duplicates_removed = 0
+    
+    for competitor in competitors:
+        url = competitor.get('url', '')
+        domain = extract_canonical_domain(url)
+        
+        if domain and domain not in seen_domains:
+            seen_domains.add(domain)
+            unique_competitors.append(competitor)
+        elif domain in seen_domains:
+            # Duplicate competitor found
+            duplicates_removed += 1
+            logger.debug(
+                f"Removing duplicate competitor: {competitor.get('name', 'Unknown')} "
+                f"(domain: {domain}, duplicate of existing competitor)"
+            )
+        else:
+            # Invalid URL - keep competitor but warn
+            logger.warning(
+                f"Competitor has invalid URL, keeping anyway: "
+                f"{competitor.get('name', 'Unknown')}"
+            )
+            unique_competitors.append(competitor)
+    
+    if duplicates_removed > 0:
+        logger.info(
+            f"Removed {duplicates_removed} duplicate competitor(s) "
+            f"(reduced from {len(competitors)} to {len(unique_competitors)})"
+        )
+    
+    return unique_competitors
+
+
 # Normalizing the count level.
 def normalize_level(count):
     if count >= 5:
@@ -1179,26 +1283,52 @@ def classify_result_type(result):
     # RULE 2: Strong CONTENT indicators (comparison/review articles)
     # These should be classified as content even if they mention pricing
     # NLP intent suggestion helps identify review pages
+    # ISSUE 2 FIX: Enhanced content patterns to catch blogs/guides about tools
     strong_content_patterns = [
         'vs', 'versus', 'comparison', 'compare', 'review', 'reviews',
         'best tool', 'best software', 'best app', 'best product', 'best solution',
         'best crm', 'best platform', 'best service',
         'top tool', 'top software', 'top app', 'top product',
-        'roundup', 'listicle', 'alternatives to'
+        'roundup', 'listicle', 'alternatives to',
+        # ISSUE 2 FIX: Add patterns for guides and prompts
+        'guide to', 'how to use', 'prompts for', 'prompt collection',
+        'ai prompts', 'tips for', 'tutorial on', 'blog post',
+        'article about', 'everything you need to know', 'ultimate guide',
+        'beginner guide', 'getting started with', 'introduction to'
     ]
     has_strong_content = any(pattern in text for pattern in strong_content_patterns)
     
     # Use NLP intent as additional signal (not decision)
-    if nlp_intent_suggestion in ["REVIEW", "DISCUSSION"]:
-        has_strong_content = True  # NLP suggests review/discussion
+    if nlp_intent_suggestion in ["REVIEW", "DISCUSSION", "GUIDE"]:
+        has_strong_content = True  # NLP suggests review/discussion/guide
     
-    # Weaker content signals (only used in combination with other signals)
-    weak_content_signals = ['review', 'comparison', 'guide', 'blog', 'article']
+    # ISSUE 2 FIX: Weaker content signals - expanded to catch more explainer content
+    weak_content_signals = [
+        'review', 'comparison', 'guide', 'blog', 'article',
+        'tips', 'tricks', 'prompts', 'examples', 'templates'
+    ]
     has_weak_content = any(signal in text for signal in weak_content_signals)
     
+    # ISSUE 2 FIX: Check for DIY BEFORE checking strong content
+    # DIY tutorials (how to build, create your own) should be DIY, not content
+    # Only check for strong content patterns that are NOT DIY-related
+    diy_specific_patterns = [
+        'how to build', 'build your own', 'create your own', 'diy',
+        'open source', 'github', 'script', 'tutorial'
+    ]
+    has_diy_specific = any(pattern in text for pattern in diy_specific_patterns)
+    
+    # If has DIY-specific patterns, skip strong content check (DIY takes priority)
+    if has_diy_specific and has_diy:
+        logger.debug(f"Classified as DIY (tutorial/build-your-own): {url}")
+        return 'diy'
+    
+    # ISSUE 2 FIX: When uncertain, prefer content over commercial
+    # Implements "seller-vs-explainer" invariant with bias toward exclusion
+    # If uncertain → EXCLUDE from commercial (classify as content)
     if has_strong_content:
-        # This is a comparison/review article, not a product page
-        logger.debug(f"Classified as CONTENT (comparison/review article): {url}")
+        # This is a comparison/review/guide article, not a product page
+        logger.debug(f"Classified as CONTENT (comparison/review/guide article): {url}")
         return 'content'
     
     # RULE 3: COMMERCIAL classification (strict requirements)
@@ -1208,7 +1338,7 @@ def classify_result_type(result):
         logger.debug(f"Classified as COMMERCIAL (strong product signals): {url}")
         return 'commercial'
     
-    # RULE 4: DIY classification
+    # RULE 4: DIY classification (fallback for cases not caught above)
     if has_diy and not has_strong_product:
         logger.debug(f"Classified as DIY (tutorial/open source): {url}")
         return 'diy'
@@ -1751,6 +1881,115 @@ def analyze_market(data: IdeaInput):
 # STAGE 2: USER-SOLUTION COMPETITOR DETECTION
 # ============================================================================
 
+def normalize_core_action_to_verb(core_action: str) -> str:
+    """
+    ISSUE 3 FIX: Normalize core_action to verb+object form for internal use.
+    
+    This function converts noun-like phrases (e.g., "AI startup validator")
+    to action-oriented verb phrases (e.g., "validate startups").
+    
+    CRITICAL RULES:
+    - This is for INTERNAL logic only (query generation, modality inference)
+    - Do NOT modify user-facing input
+    - If already action-oriented, return as-is
+    - Handles common noun→verb patterns deterministically
+    
+    Examples:
+    - "AI startup idea validator" → "validate startup ideas"
+    - "validator" → "validate"
+    - "generator" → "generate"
+    - "analyzer" → "analyze"
+    - "validate" → "validate" (already verb)
+    
+    Args:
+        core_action: Original core_action from user input
+        
+    Returns:
+        Normalized action phrase (verb form)
+    """
+    text = core_action.lower().strip()
+    
+    # Common noun-to-verb transformations (deterministic mapping)
+    # Order matters: check longer patterns first to avoid partial matches
+    noun_to_verb_patterns = [
+        # -ator suffix (validator → validate)
+        ('validator', 'validate'),
+        ('generator', 'generate'),
+        ('analyzer', 'analyze'),
+        ('creator', 'create'),
+        ('optimizer', 'optimize'),
+        ('automator', 'automate'),
+        
+        # -er suffix (checker → check)
+        ('checker', 'check'),
+        ('tester', 'test'),
+        ('scanner', 'scan'),
+        ('tracker', 'track'),
+        ('builder', 'build'),
+        ('finder', 'find'),
+        ('manager', 'manage'),
+        ('scheduler', 'schedule'),
+        ('planner', 'plan'),
+        
+        # -tion suffix (validation → validate)
+        ('validation', 'validate'),
+        ('generation', 'generate'),
+        ('analysis', 'analyze'),
+        ('creation', 'create'),
+        ('optimization', 'optimize'),
+        ('automation', 'automate'),
+        
+        # -or suffix (advisor → advise)
+        ('advisor', 'advise'),
+        ('supervisor', 'supervise'),
+    ]
+    
+    # Try to extract verb by pattern matching
+    for noun_pattern, verb_form in noun_to_verb_patterns:
+        if noun_pattern in text:
+            # Replace the noun with verb form, keeping rest of phrase
+            # E.g., "AI startup validator" → "AI startup validate"
+            # Then clean up to get "validate startup"
+            normalized = text.replace(noun_pattern, verb_form)
+            
+            # Clean up: remove common filler words and reorder if needed
+            filler_words = {'ai', 'powered', 'smart', 'intelligent', 'automated'}
+            words = normalized.split()
+            meaningful_words = [w for w in words if w not in filler_words]
+            
+            # If we have multiple words, ensure verb comes first
+            if len(meaningful_words) > 1 and meaningful_words[0] != verb_form:
+                # Try to put verb first
+                if verb_form in meaningful_words:
+                    meaningful_words.remove(verb_form)
+                    meaningful_words.insert(0, verb_form)
+            
+            result = ' '.join(meaningful_words)
+            logger.debug(f"Normalized core_action: '{core_action}' → '{result}'")
+            return result
+    
+    # If no pattern matched, check if it's already a verb phrase
+    # Common action verbs that indicate it's already in correct form
+    action_verbs = {
+        'validate', 'generate', 'analyze', 'create', 'build', 'automate',
+        'check', 'test', 'scan', 'track', 'manage', 'schedule', 'plan',
+        'optimize', 'process', 'transform', 'convert', 'extract', 'parse',
+        'summarize', 'classify', 'categorize', 'filter', 'sort', 'rank',
+        'recommend', 'suggest', 'predict', 'forecast', 'estimate'
+    }
+    
+    first_word = text.split()[0] if text.split() else ''
+    if first_word in action_verbs:
+        # Already in verb form, return cleaned up
+        logger.debug(f"Core action already verb form: '{core_action}'")
+        return text
+    
+    # No transformation found - return as-is with warning
+    # This handles edge cases where user provides novel action phrases
+    logger.debug(f"No normalization pattern found for: '{core_action}', using as-is")
+    return text
+
+
 def classify_solution_modality(solution: UserSolution):
     """
     Classify solution modality as SOFTWARE, SERVICE, PHYSICAL_PRODUCT, or HYBRID.
@@ -1993,6 +2232,9 @@ def generate_solution_class_queries(solution: UserSolution, modality: str):
     SOFTWARE-specific terms (tool, software, platform, SaaS, AI, automation)
     MUST NEVER be used for SERVICE or PHYSICAL_PRODUCT modalities.
     
+    ISSUE 3 FIX: Normalize core_action to verb form for query generation.
+    This improves semantic precision and reduces false positives from content.
+    
     RULES:
     - Queries are rule-generated and deterministic
     - Use static templates based on solution attributes AND modality
@@ -2031,8 +2273,12 @@ def generate_solution_class_queries(solution: UserSolution, modality: str):
     Returns:
         List of search query strings (3-5 queries)
     """
-    # Extract and normalize attributes
-    core_action = solution.core_action.lower().strip()
+    # ISSUE 3 FIX: Normalize core_action to verb form for internal query logic
+    # User input is NOT modified - this is for query generation only
+    normalized_core_action = normalize_core_action_to_verb(solution.core_action)
+    
+    # Extract and normalize other attributes
+    core_action = normalized_core_action.lower().strip()
     output_type = solution.output_type.lower().strip()
     target_user = solution.target_user.lower().strip()
     automation_level = solution.automation_level.lower().strip()
@@ -2211,6 +2457,24 @@ def compute_market_fragmentation(
     
     Fragmented markets have many small, specialized competitors.
     Consolidated markets have few dominant players.
+    
+    ISSUE 4 FIX: Document density vs fragmentation invariant
+    ========================================================
+    HIGH competitor_density + CONSOLIDATED market_fragmentation CAN coexist.
+    
+    Interpretation:
+    - HIGH density + CONSOLIDATED = Many competitors exist, but attention/revenue
+      is dominated by a few major players (e.g., "CRM software" has 50+ tools
+      but Salesforce/HubSpot dominate mindshare)
+    
+    - LOW density + FRAGMENTED = Few competitors found in search, but market
+      is fragmented (e.g., local services with no online presence)
+    
+    - HIGH density + FRAGMENTED = Many competitors, no clear leaders
+      (highly competitive, no dominant players)
+    
+    This relationship is valid and explicitly handled below.
+    ========================================================
     
     RULES (deterministic heuristics):
     1. Count local/small business indicators vs enterprise indicators
@@ -2582,9 +2846,17 @@ def analyze_user_solution_competitors(solution: UserSolution):
     diy_alternatives = deduplicate_results(diy_alternatives)
     
     # ========================================================================
+    # ISSUE 1 FIX: Deduplicate competitors by canonical domain
+    # ========================================================================
+    # This MUST happen BEFORE computing market strength parameters
+    # to prevent inflated competitor_density and incorrect market_fragmentation
+    commercial_products = deduplicate_competitors_by_domain(commercial_products)
+    
+    # ========================================================================
     # STEP 5: Compute market strength parameters
     # ========================================================================
     # Each parameter is computed independently (no aggregation, no scoring)
+    # ISSUE 1 FIX: competitor_density now reflects UNIQUE competitors only
     
     competitor_density = compute_competitor_density(
         len(commercial_products),
