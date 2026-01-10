@@ -1,8 +1,19 @@
 import os
-from openai import AzureOpenAI
+
+try:
+    from openai import AzureOpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    AzureOpenAI = None
 
 class AzureLLMClient:
     def __init__(self):
+        if not OPENAI_AVAILABLE:
+            raise ImportError(
+                "openai package not installed. Install with: pip install openai"
+            )
+        
         self.client = AzureOpenAI(
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             api_version=os.getenv("AZURE_OPENAI_API_VERSION"),

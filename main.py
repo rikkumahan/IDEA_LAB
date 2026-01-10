@@ -1,6 +1,7 @@
 import os
 import requests
 import logging
+from typing import Dict, Any, Optional, List
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -2982,3 +2983,226 @@ def generate_explanation(stage1, stage2, stage3, validation):
         "stage_3_leverage": stage3,
         "validation": validation
     })
+
+
+# ============================================================================
+# COMPLETE VALIDATION PIPELINE (STAGES 1-4)
+# ============================================================================
+
+from questioning_layer import (
+    create_questioning_session,
+    QuestioningSession
+)
+from stage3_leverage import run_stage3_leverage_detection
+from validation import (
+    ProblemReality,
+    MarketReality,
+    LeverageReality,
+    validate_startup_idea,
+    format_validation_output
+)
+from explanation_layer import generate_explanation as generate_llm_explanation
+
+
+class CompleteValidationInput(BaseModel):
+    """
+    Complete input for end-to-end validation pipeline.
+    
+    Combines Stage 1 (problem), Stage 2 (market), and Stage 3 (leverage).
+    """
+    # Stage 1: Problem analysis (required)
+    problem: str
+    target_user: str
+    user_claimed_frequency: str
+    
+    # Stage 2: Market analysis (optional)
+    solution: Optional[UserSolution] = None
+    
+    # Stage 3: Leverage inputs (required)
+    leverage_inputs: Dict[str, Any]
+    
+    # Options
+    user_context: Optional[str] = None  # For question wording
+    use_llm: bool = True  # Enable LLM for wording and explanation
+
+
+@app.post("/validate-complete")
+def validate_complete(data: CompleteValidationInput):
+    """
+    Complete validation pipeline: Stage 1 → Stage 2 → Stage 3 → Stage 4.
+    
+    This endpoint runs the entire deterministic decision engine:
+    1. Stage 1: Analyze problem reality (severity)
+    2. Stage 2: Analyze market reality (optional, if solution provided)
+    3. Stage 3: Detect leverage advantages
+    4. Stage 4: Validate and explain
+    
+    CRITICAL GUARANTEES:
+    - All decision logic is deterministic
+    - LLM used only for question wording and explanation
+    - Same inputs always produce same validation_class
+    - Market data is contextual only (does not invalidate problem)
+    
+    Args:
+        data: CompleteValidationInput with all stages
+        
+    Returns:
+        Complete validation output with explanation
+    """
+    logger.info("Starting complete validation pipeline")
+    
+    # ========================================================================
+    # STAGE 1: PROBLEM REALITY (existing logic)
+    # ========================================================================
+    logger.info("Stage 1: Analyzing problem reality")
+    
+    idea_input = IdeaInput(
+        problem=data.problem,
+        target_user=data.target_user,
+        user_claimed_frequency=data.user_claimed_frequency
+    )
+    
+    problem_analysis = analyze_idea(idea_input)
+    
+    problem_reality = ProblemReality(
+        problem_level=problem_analysis["problem_level"],
+        signals=problem_analysis["raw_signals"],
+        normalized_signals=problem_analysis["normalized_signals"]
+    )
+    
+    logger.info(f"Stage 1 complete: problem_level={problem_reality.problem_level}")
+    
+    # ========================================================================
+    # STAGE 2: MARKET REALITY (optional, if solution provided)
+    # ========================================================================
+    market_reality = None
+    
+    if data.solution:
+        logger.info("Stage 2: Analyzing market reality")
+        
+        market_analysis = analyze_user_solution_competitors(data.solution)
+        
+        market_reality = MarketReality(
+            solution_modality=market_analysis["solution_modality"],
+            market_strength=market_analysis["market_strength"],
+            competitors=market_analysis["competitors"]
+        )
+        
+        logger.info(f"Stage 2 complete: modality={market_reality.solution_modality}")
+    else:
+        logger.info("Stage 2 skipped: no solution provided")
+    
+    # ========================================================================
+    # STAGE 3: LEVERAGE DETECTION (new logic)
+    # ========================================================================
+    logger.info("Stage 3: Detecting leverage advantages")
+    
+    # Run Stage 3 with validated inputs
+    leverage_flags = run_stage3_leverage_detection(data.leverage_inputs)
+    
+    leverage_reality = LeverageReality(
+        leverage_flags=[
+            {
+                "name": flag.name,
+                "present": flag.present,
+                "reason": flag.reason
+            }
+            for flag in leverage_flags.flags
+        ]
+    )
+    
+    logger.info(f"Stage 3 complete: {len(leverage_flags.get_present_flags())} flags detected")
+    
+    # ========================================================================
+    # STAGE 4: VALIDATION + EXPLANATION
+    # ========================================================================
+    logger.info("Stage 4: Validation and explanation")
+    
+    # Validate (deterministic)
+    validation_state = validate_startup_idea(
+        problem_reality,
+        market_reality,
+        leverage_reality
+    )
+    
+    logger.info(f"Validation complete: {validation_state.validation_class.value}")
+    
+    # Format output
+    output = format_validation_output(
+        problem_reality,
+        market_reality,
+        leverage_reality,
+        validation_state
+    )
+    
+    # Generate explanation (LLM or deterministic fallback)
+    if data.use_llm:
+        try:
+            explanation = generate_llm_explanation(
+                output["problem_reality"],
+                output.get("market_reality", {}),
+                output["leverage_reality"],
+                output["validation_state"],
+                use_llm=True
+            )
+        except Exception as e:
+            logger.warning(f"LLM explanation failed: {e}, using deterministic")
+            explanation = generate_llm_explanation(
+                output["problem_reality"],
+                output.get("market_reality", {}),
+                output["leverage_reality"],
+                output["validation_state"],
+                use_llm=False
+            )
+    else:
+        explanation = generate_llm_explanation(
+            output["problem_reality"],
+            output.get("market_reality", {}),
+            output["leverage_reality"],
+            output["validation_state"],
+            use_llm=False
+        )
+    
+    # Add explanation to output
+    output["explanation"] = explanation
+    
+    logger.info("Complete validation pipeline finished")
+    
+    return output
+
+
+@app.get("/leverage-questions")
+def get_leverage_questions(
+    context: Optional[str] = None,
+    use_llm: bool = True
+):
+    """
+    Get leverage questions for Stage 3 input collection.
+    
+    This endpoint returns the questions that users need to answer
+    to provide leverage inputs. Questions can be adapted by LLM
+    for clarity and domain relevance.
+    
+    Args:
+        context: Optional user context (domain/industry)
+        use_llm: Whether to use LLM for question wording
+        
+    Returns:
+        List of questions with adapted wording
+    """
+    logger.info(f"Getting leverage questions (LLM: {use_llm})")
+    
+    # Get LLM client
+    llm = get_llm_client()
+    
+    # Create questioning session
+    session = create_questioning_session(llm, context, use_llm)
+    
+    # Get questions for presentation
+    questions = session.get_questions_for_presentation()
+    
+    return {
+        "questions": questions,
+        "use_llm": use_llm,
+        "context": context
+    }
