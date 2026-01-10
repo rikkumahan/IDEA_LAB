@@ -2962,3 +2962,23 @@ def analyze_user_solution(solution: UserSolution):
     return {
         'user_solution_competitors': competitors
     }
+
+import os
+from llm_stub import StubLLMClient
+
+def get_llm_client():
+    if os.getenv("AZURE_OPENAI_API_KEY"):
+        from llm_azure import AzureLLMClient
+        return AzureLLMClient()
+    return StubLLMClient()
+
+from llm_factory import get_llm_client
+
+def generate_explanation(stage1, stage2, stage3, validation):
+    llm = get_llm_client()
+    return llm.explain({
+        "stage_1_problem": stage1,
+        "stage_2_market": stage2,
+        "stage_3_leverage": stage3,
+        "validation": validation
+    })
