@@ -28,9 +28,30 @@ This was incorrect because:
 
 COST_LEVERAGE now ONLY triggers when at least ONE explicit cost advantage signal exists:
 
-1. **Pricing delta**: Significant price advantage (e.g., "10x cheaper", "free vs paid")
-2. **Infrastructure shift**: Lower operational costs through different architecture (e.g., serverless vs self-hosted, AI vs human ops)
-3. **Distribution shift**: Lower customer acquisition costs through unique channel (e.g., embedded in platform, viral mechanism)
+1. **Pricing delta**: Significant price advantage applicable across all domains
+   - SOFTWARE: Free tier vs $50/month competitors
+   - SERVICE: $20/hour vs $100/hour industry rate
+   - PRODUCT: $50 retail vs $200 competitors
+
+2. **Infrastructure shift**: Lower operational costs through different operations
+   - SOFTWARE: Serverless vs self-hosted, AI vs human ops
+   - SERVICE: Remote vs on-site, platform vs individual contractors
+   - PRODUCT: Drop-shipping vs warehousing, 3D printing vs traditional manufacturing
+
+3. **Distribution shift**: Lower customer acquisition costs through unique channel
+   - SOFTWARE: Embedded in platform, viral mechanisms
+   - SERVICE: Local network effects, exclusive provider networks
+   - PRODUCT: Direct-to-consumer subscription vs retail markup
+
+**Domain-agnostic design:**
+
+The three cost leverage signals are intentionally designed to work across all solution modalities:
+- SOFTWARE solutions (SaaS, platforms, applications)
+- SERVICE solutions (consulting, repair, human-delivered services)
+- PHYSICAL_PRODUCT solutions (manufactured goods, devices, equipment)
+- HYBRID solutions (combinations of the above)
+
+Each signal includes domain-specific examples to guide users in different industries.
 
 **Code changes:**
 

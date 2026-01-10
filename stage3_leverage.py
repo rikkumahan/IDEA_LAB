@@ -155,22 +155,33 @@ def detect_cost_leverage(
     RULE 1: COST_LEVERAGE
     
     Trigger if AT LEAST ONE of the following is explicitly true:
-    - has_pricing_delta == True (e.g., "10x cheaper", "free vs paid")
-    - has_infrastructure_shift == True (e.g., self-hosted → serverless, AI vs human ops)
-    - has_distribution_shift == True (e.g., new channel unavailable to incumbents)
+    - has_pricing_delta == True (e.g., "10x cheaper", "free vs paid", dramatic price difference)
+    - has_infrastructure_shift == True (e.g., operational model that lowers costs across any domain)
+    - has_distribution_shift == True (e.g., channel that reduces customer acquisition costs)
     
     REASONING:
     Cost leverage comes from a measurable cost advantage through one of three mechanisms:
-    1. Pricing delta: Direct price advantage (10x cheaper, free tier, etc.)
-    2. Infrastructure shift: Lower operational costs through different architecture
+    1. Pricing delta: Direct price advantage (10x cheaper, free tier, dramatically lower pricing)
+       - SOFTWARE: Free tier vs paid competitors, $5/month vs $50/month
+       - SERVICE: $20/hour vs $100/hour industry rate
+       - PRODUCT: $50 vs $200 competitors through manufacturing efficiency
+    
+    2. Infrastructure shift: Lower operational costs through different architecture/operations
+       - SOFTWARE: Serverless eliminating server costs, AI replacing human ops
+       - SERVICE: Remote delivery eliminating travel costs, platform vs individual contractors
+       - PRODUCT: Drop-shipping vs warehousing, 3D printing vs traditional manufacturing
+    
     3. Distribution shift: Lower customer acquisition costs through unique channel
+       - SOFTWARE: Embedded in platform (Slack, Teams), viral mechanisms
+       - SERVICE: Local network effects, exclusive provider networks
+       - PRODUCT: Direct-to-consumer subscription vs retail markup
     
     Automation or replacing human labor ALONE does NOT imply cost leverage.
-    There must be an explicit advantage signal.
+    There must be an explicit advantage signal applicable to the solution's domain.
     
     Args:
         has_pricing_delta: Does solution have significant pricing advantage?
-        has_infrastructure_shift: Does solution use fundamentally different infrastructure?
+        has_infrastructure_shift: Does solution use fundamentally different infrastructure/operations?
         has_distribution_shift: Does solution use unique distribution channel?
         
     Returns:
