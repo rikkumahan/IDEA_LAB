@@ -64,7 +64,10 @@ class AzureLLMClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.1,  # Low temperature for consistent rewording
+                # Low temperature (0.1) for minimal creativity and maximum consistency
+                # This ensures rewording stays very close to original meaning
+                # Higher values (>0.3) might introduce unintended semantic drift
+                temperature=0.1,
                 max_tokens=150,
             )
             return response.choices[0].message.content.strip()

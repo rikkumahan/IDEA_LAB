@@ -3062,9 +3062,29 @@ def validate_complete_idea(
     logger.info("\n=== STAGE 3: Leverage Detection ===")
     
     # Extract market parameters needed for Stage 3
-    automation_relevance = market_strength.get("automation_relevance", "MEDIUM")
-    substitute_pressure = market_strength.get("substitute_pressure", "MEDIUM")
-    content_saturation = market_strength.get("content_saturation", "MEDIUM")
+    # These should always be present from Stage 2, but we provide fallbacks for robustness
+    automation_relevance = market_strength.get("automation_relevance")
+    substitute_pressure = market_strength.get("substitute_pressure")
+    content_saturation = market_strength.get("content_saturation")
+    
+    # Validate that Stage 2 provided all required parameters
+    if not all([automation_relevance, substitute_pressure, content_saturation]):
+        logger.error(
+            "Stage 2 market strength incomplete. Missing parameters: "
+            f"automation_relevance={automation_relevance}, "
+            f"substitute_pressure={substitute_pressure}, "
+            f"content_saturation={content_saturation}"
+        )
+        return {
+            "error": "Stage 2 market analysis incomplete. Cannot proceed with leverage detection.",
+            "missing_parameters": [
+                k for k, v in {
+                    "automation_relevance": automation_relevance,
+                    "substitute_pressure": substitute_pressure,
+                    "content_saturation": content_saturation
+                }.items() if not v
+            ]
+        }
     
     # Run deterministic leverage detection
     stage3_result = detect_leverage_flags(
