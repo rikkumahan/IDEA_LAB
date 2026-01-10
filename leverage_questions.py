@@ -128,6 +128,63 @@ CANONICAL_QUESTIONS = {
             False: "Standard web application with no special constraints"
         },
         "sanity_check": None
+    },
+    
+    "has_pricing_delta": {
+        "id": "has_pricing_delta",
+        "canonical_wording": (
+            "Does your solution have a significant pricing advantage over existing alternatives? "
+            "(e.g., 10x cheaper, free vs paid alternatives, dramatically lower cost structure)"
+        ),
+        "semantic_meaning": (
+            "Determine if the solution has an explicit cost advantage through pricing. "
+            "This must be a measurable pricing difference, not just 'cheaper' but "
+            "significantly cheaper (e.g., 10x, free tier, or fundamentally different pricing model)."
+        ),
+        "answer_type": "boolean",
+        "examples": {
+            True: "Free tier where competitors charge, or 10x cheaper pricing",
+            False: "Similar pricing to competitors, or slightly cheaper"
+        },
+        "sanity_check": None
+    },
+    
+    "has_infrastructure_shift": {
+        "id": "has_infrastructure_shift",
+        "canonical_wording": (
+            "Does your solution use fundamentally different infrastructure than existing alternatives? "
+            "(e.g., serverless vs self-hosted, AI inference vs human operations, cloud vs on-premise)"
+        ),
+        "semantic_meaning": (
+            "Determine if the solution leverages an infrastructure shift that creates cost advantages. "
+            "This must be a fundamental architectural difference, not just using newer technology. "
+            "Examples: serverless eliminating server costs, AI replacing human ops teams."
+        ),
+        "answer_type": "boolean",
+        "examples": {
+            True: "Uses serverless architecture where competitors use dedicated servers, or AI where they use human teams",
+            False: "Uses similar infrastructure as competitors"
+        },
+        "sanity_check": None
+    },
+    
+    "has_distribution_shift": {
+        "id": "has_distribution_shift",
+        "canonical_wording": (
+            "Does your solution use a distribution channel that competitors cannot easily access? "
+            "(e.g., new platform integration, embedded in existing workflow, viral mechanism)"
+        ),
+        "semantic_meaning": (
+            "Determine if the solution has distribution leverage through a channel "
+            "that is unavailable or difficult for incumbents to replicate. "
+            "This must be a true distribution advantage, not just 'different marketing'."
+        ),
+        "answer_type": "boolean",
+        "examples": {
+            True: "Embedded in Slack where competitors are standalone, or viral sharing mechanism",
+            False: "Standard SaaS distribution through website and ads"
+        },
+        "sanity_check": None
     }
 }
 
@@ -509,5 +566,8 @@ def format_for_stage3(validated_inputs: Dict[str, Any]) -> Dict[str, Any]:
         "step_reduction_ratio": validated_inputs["step_reduction_ratio"],
         "delivers_final_answer": validated_inputs["delivers_final_answer"],
         "unique_data_access": validated_inputs["unique_data_access"],
-        "works_under_constraints": validated_inputs["works_under_constraints"]
+        "works_under_constraints": validated_inputs["works_under_constraints"],
+        "has_pricing_delta": validated_inputs["has_pricing_delta"],
+        "has_infrastructure_shift": validated_inputs["has_infrastructure_shift"],
+        "has_distribution_shift": validated_inputs["has_distribution_shift"]
     }

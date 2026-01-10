@@ -2720,6 +2720,43 @@ def compute_automation_relevance(
             return "MEDIUM"
 
 
+def compute_market_risk(
+    competitor_density: str,
+    market_fragmentation: str
+) -> List[str]:
+    """
+    Compute market risk flags based on competitor density and fragmentation.
+    
+    FACTUAL SIGNAL: What market risks exist based on competitive landscape?
+    
+    RULES (deterministic):
+    - DOMINANT_INCUMBENTS: HIGH competitor_density AND CONSOLIDATED market_fragmentation
+      This indicates a market with many competitors but attention/revenue dominated
+      by a few major players (e.g., CRM software has 50+ tools but Salesforce dominates)
+    
+    This is a RISK FLAG, not a judgment about startup viability.
+    It must be visible to downstream reasoning layers.
+    
+    Args:
+        competitor_density: Density of competitors (NONE, LOW, MEDIUM, HIGH)
+        market_fragmentation: Market fragmentation level (CONSOLIDATED, FRAGMENTED, MIXED)
+        
+    Returns:
+        List of risk flags (may be empty if no risks detected)
+    """
+    risk_flags = []
+    
+    # Rule: HIGH density + CONSOLIDATED = DOMINANT_INCUMBENTS
+    if competitor_density == "HIGH" and market_fragmentation == "CONSOLIDATED":
+        risk_flags.append("DOMINANT_INCUMBENTS")
+        logger.info(
+            "Market risk detected: DOMINANT_INCUMBENTS "
+            f"(density={competitor_density}, fragmentation={market_fragmentation})"
+        )
+    
+    return risk_flags
+
+
 def analyze_user_solution_competitors(solution: UserSolution):
     """
     STAGE 2: Detect competitors and compute market strength parameters for user's solution.
@@ -2746,6 +2783,7 @@ def analyze_user_solution_competitors(solution: UserSolution):
     - content_saturation: LOW, MEDIUM, HIGH (relative to THIS solution)
     - solution_class_maturity: NON_EXISTENT, EMERGING, ESTABLISHED
     - automation_relevance: LOW, MEDIUM, HIGH
+    - market_risk: List of risk flags (e.g., ["DOMINANT_INCUMBENTS"])
     
     CONSTRAINTS:
     - No ranking or scoring
@@ -2891,11 +2929,18 @@ def analyze_user_solution_competitors(solution: UserSolution):
         modality
     )
     
+    # Compute market risk flags
+    market_risk = compute_market_risk(
+        competitor_density,
+        market_fragmentation
+    )
+    
     logger.info(
         f"Stage 2 market strength: "
         f"density={competitor_density}, fragmentation={market_fragmentation}, "
         f"substitutes={substitute_pressure}, content={content_saturation}, "
-        f"maturity={solution_class_maturity}, automation={automation_relevance}"
+        f"maturity={solution_class_maturity}, automation={automation_relevance}, "
+        f"risk_flags={market_risk if market_risk else 'NONE'}"
     )
     
     # ========================================================================
@@ -2935,6 +2980,7 @@ def analyze_user_solution_competitors(solution: UserSolution):
             "content_saturation": content_saturation,
             "solution_class_maturity": solution_class_maturity,
             "automation_relevance": automation_relevance,
+            "market_risk": market_risk,
         },
         "competitors": {
             "software": software_competitors,
@@ -2988,6 +3034,9 @@ class LeverageInput(BaseModel):
     delivers_final_answer: bool
     unique_data_access: bool
     works_under_constraints: bool
+    has_pricing_delta: bool
+    has_infrastructure_shift: bool
+    has_distribution_shift: bool
 
 
 # ============================================================================
@@ -3094,6 +3143,9 @@ def validate_complete_idea(
         delivers_final_answer=leverage_input.delivers_final_answer,
         unique_data_access=leverage_input.unique_data_access,
         works_under_constraints=leverage_input.works_under_constraints,
+        has_pricing_delta=leverage_input.has_pricing_delta,
+        has_infrastructure_shift=leverage_input.has_infrastructure_shift,
+        has_distribution_shift=leverage_input.has_distribution_shift,
         # Market inputs from Stage 2
         automation_relevance=automation_relevance,
         substitute_pressure=substitute_pressure,
@@ -3191,6 +3243,9 @@ def detect_leverage(leverage_input: LeverageInput, market_strength: Dict[str, st
         delivers_final_answer=leverage_input.delivers_final_answer,
         unique_data_access=leverage_input.unique_data_access,
         works_under_constraints=leverage_input.works_under_constraints,
+        has_pricing_delta=leverage_input.has_pricing_delta,
+        has_infrastructure_shift=leverage_input.has_infrastructure_shift,
+        has_distribution_shift=leverage_input.has_distribution_shift,
         automation_relevance=market_strength.get("automation_relevance", "MEDIUM"),
         substitute_pressure=market_strength.get("substitute_pressure", "MEDIUM"),
         content_saturation=market_strength.get("content_saturation", "MEDIUM")
