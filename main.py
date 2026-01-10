@@ -1,6 +1,7 @@
 import os
 import requests
 import logging
+from typing import Dict, List, Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -2963,22 +2964,218 @@ def analyze_user_solution(solution: UserSolution):
         'user_solution_competitors': competitors
     }
 
-import os
-from llm_stub import StubLLMClient
-
-def get_llm_client():
-    if os.getenv("AZURE_OPENAI_API_KEY"):
-        from llm_azure import AzureLLMClient
-        return AzureLLMClient()
-    return StubLLMClient()
-
+# ============================================================================
+# STAGE 3 & VALIDATION IMPORTS
+# ============================================================================
+from stage3_leverage import detect_leverage_flags
+from validation import validate_idea
+from leverage_questions import collect_leverage_inputs, format_for_stage3
 from llm_factory import get_llm_client
 
-def generate_explanation(stage1, stage2, stage3, validation):
-    llm = get_llm_client()
-    return llm.explain({
-        "stage_1_problem": stage1,
-        "stage_2_market": stage2,
-        "stage_3_leverage": stage3,
-        "validation": validation
-    })
+
+# ============================================================================
+# LEVERAGE INPUT MODEL (for API endpoint)
+# ============================================================================
+class LeverageInput(BaseModel):
+    """
+    Structured leverage inputs for Stage 3.
+    
+    These are STRUCTURED ONLY - no free text allowed.
+    All fields are required to ensure complete leverage analysis.
+    """
+    replaces_human_labor: bool
+    step_reduction_ratio: int
+    delivers_final_answer: bool
+    unique_data_access: bool
+    works_under_constraints: bool
+
+
+# ============================================================================
+# COMPLETE IDEA VALIDATION ENDPOINT (All 3 Stages + Validation)
+# ============================================================================
+@app.post("/validate-complete-idea")
+def validate_complete_idea(
+    problem_input: IdeaInput,
+    solution_input: UserSolution,
+    leverage_input: LeverageInput
+):
+    """
+    Complete idea validation: Run all 3 stages and final validation.
+    
+    This is the MAIN endpoint that integrates:
+    - Stage 1: Problem Reality Analysis
+    - Stage 2: Market Reality Analysis (solution-specific)
+    - Stage 3: Leverage Detection (deterministic)
+    - Validation: Final classification
+    - Explanation: LLM narration (optional)
+    
+    WORKFLOW:
+    1. Stage 1: Analyze problem severity
+    2. Stage 2: Analyze market for the specific solution
+    3. Stage 3: Detect leverage flags (deterministic rules)
+    4. Validation: Synchronize all stages into final classification
+    5. Explanation: Generate human-readable explanation (LLM optional)
+    
+    Args:
+        problem_input: Problem statement and context
+        solution_input: Structured solution attributes
+        leverage_input: Structured leverage indicators
+        
+    Returns:
+        Complete validation output with all stages and explanation
+    """
+    logger.info("=" * 70)
+    logger.info("COMPLETE IDEA VALIDATION: Starting full analysis")
+    logger.info("=" * 70)
+    
+    # ========================================================================
+    # STAGE 1: Problem Reality Analysis
+    # ========================================================================
+    logger.info("\n=== STAGE 1: Problem Reality Analysis ===")
+    stage1_result = analyze_idea(problem_input)
+    
+    problem_level = stage1_result.get("problem_level")
+    problem_signals = {
+        "raw_signals": stage1_result.get("raw_signals", {}),
+        "normalized_signals": stage1_result.get("normalized_signals", {})
+    }
+    
+    logger.info(f"Stage 1 complete: Problem level = {problem_level}")
+    
+    # ========================================================================
+    # STAGE 2: Market Reality Analysis (solution-specific)
+    # ========================================================================
+    logger.info("\n=== STAGE 2: Market Reality Analysis ===")
+    stage2_result = analyze_user_solution_competitors(solution_input)
+    
+    market_strength = stage2_result.get("market_strength", {})
+    solution_modality = stage2_result.get("solution_modality")
+    
+    logger.info(
+        f"Stage 2 complete: Modality = {solution_modality}, "
+        f"Competitor density = {market_strength.get('competitor_density')}"
+    )
+    
+    # ========================================================================
+    # STAGE 3: Leverage Detection (deterministic)
+    # ========================================================================
+    logger.info("\n=== STAGE 3: Leverage Detection ===")
+    
+    # Extract market parameters needed for Stage 3
+    automation_relevance = market_strength.get("automation_relevance", "MEDIUM")
+    substitute_pressure = market_strength.get("substitute_pressure", "MEDIUM")
+    content_saturation = market_strength.get("content_saturation", "MEDIUM")
+    
+    # Run deterministic leverage detection
+    stage3_result = detect_leverage_flags(
+        # User leverage inputs
+        replaces_human_labor=leverage_input.replaces_human_labor,
+        step_reduction_ratio=leverage_input.step_reduction_ratio,
+        delivers_final_answer=leverage_input.delivers_final_answer,
+        unique_data_access=leverage_input.unique_data_access,
+        works_under_constraints=leverage_input.works_under_constraints,
+        # Market inputs from Stage 2
+        automation_relevance=automation_relevance,
+        substitute_pressure=substitute_pressure,
+        content_saturation=content_saturation
+    )
+    
+    leverage_flags = stage3_result.get("leverage_flags", [])
+    leverage_details = stage3_result.get("leverage_details", {})
+    
+    logger.info(
+        f"Stage 3 complete: {len(leverage_flags)} leverage flag(s) detected - "
+        f"{leverage_flags if leverage_flags else 'NONE'}"
+    )
+    
+    # ========================================================================
+    # VALIDATION: Synchronize all stages
+    # ========================================================================
+    logger.info("\n=== VALIDATION: Synchronizing all stages ===")
+    
+    validation_result = validate_idea(
+        problem_level=problem_level,
+        problem_signals=problem_signals,
+        market_strength=market_strength,
+        leverage_flags=leverage_flags,
+        leverage_details=leverage_details
+    )
+    
+    validation_state = validation_result.get("validation_state", {})
+    validation_class = validation_state.get("validation_class")
+    
+    logger.info(f"Validation complete: {validation_class}")
+    
+    # ========================================================================
+    # EXPLANATION: Generate human-readable explanation (LLM optional)
+    # ========================================================================
+    logger.info("\n=== EXPLANATION: Generating narration ===")
+    
+    try:
+        llm = get_llm_client()
+        explanation = llm.explain({
+            "stage_1_problem": validation_result["problem_reality"],
+            "stage_2_market": validation_result["market_reality"],
+            "stage_3_leverage": validation_result["leverage_reality"],
+            "validation": validation_state
+        })
+        logger.info("Explanation generated successfully")
+    except Exception as e:
+        logger.warning(f"Explanation generation failed: {e}")
+        explanation = (
+            "Explanation unavailable. Analysis is based on deterministic rules only."
+        )
+    
+    # ========================================================================
+    # FINAL OUTPUT: Complete validation with all stages
+    # ========================================================================
+    logger.info("=" * 70)
+    logger.info(f"COMPLETE VALIDATION: {validation_class}")
+    logger.info("=" * 70)
+    
+    return {
+        "validation_result": validation_result,
+        "explanation": explanation,
+        "metadata": {
+            "solution_modality": solution_modality,
+            "stages_completed": ["Stage 1: Problem Reality", "Stage 2: Market Reality", "Stage 3: Leverage Detection"],
+            "deterministic": True,
+            "llm_used": "explanation_only"
+        }
+    }
+
+
+# ============================================================================
+# STAGE 3 ONLY ENDPOINT (for testing/debugging)
+# ============================================================================
+@app.post("/detect-leverage")
+def detect_leverage(leverage_input: LeverageInput, market_strength: Dict[str, str]):
+    """
+    Stage 3 only: Detect leverage flags based on structured inputs.
+    
+    This is a STANDALONE endpoint for Stage 3 leverage detection.
+    Useful for testing and debugging leverage rules.
+    
+    Args:
+        leverage_input: Structured leverage indicators
+        market_strength: Market strength parameters from Stage 2
+        
+    Returns:
+        Leverage detection results
+    """
+    logger.info("Stage 3 standalone: Detecting leverage flags")
+    
+    result = detect_leverage_flags(
+        replaces_human_labor=leverage_input.replaces_human_labor,
+        step_reduction_ratio=leverage_input.step_reduction_ratio,
+        delivers_final_answer=leverage_input.delivers_final_answer,
+        unique_data_access=leverage_input.unique_data_access,
+        works_under_constraints=leverage_input.works_under_constraints,
+        automation_relevance=market_strength.get("automation_relevance", "MEDIUM"),
+        substitute_pressure=market_strength.get("substitute_pressure", "MEDIUM"),
+        content_saturation=market_strength.get("content_saturation", "MEDIUM")
+    )
+    
+    return {
+        "stage_3_leverage": result
+    }
