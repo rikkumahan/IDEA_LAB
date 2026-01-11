@@ -25,7 +25,13 @@ stemmer = PorterStemmer()
 lemmatizer = WordNetLemmatizer()
 
 # English stopwords (deterministic list)
-STOPWORDS = set(stopwords.words('english'))
+try:
+    STOPWORDS = set(stopwords.words("english"))
+except LookupError:
+    import nltk
+    nltk.download("stopwords", quiet=True)
+    STOPWORDS = set(stopwords.words("english"))
+
 
 # Excluded phrases - phrases where keywords should NOT match
 # Format: (keyword_stem, excluded_phrase_pattern)
